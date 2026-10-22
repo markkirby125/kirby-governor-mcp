@@ -3,16 +3,31 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-const REPO_ROOT = path.resolve(process.env.KIRBY_GOVERNOR_REPO_ROOT || process.cwd());
+const RAW_REPO_ROOT = path.resolve(process.env.KIRBY_GOVERNOR_REPO_ROOT || process.cwd());
+const REPO_ROOT = existsSync(RAW_REPO_ROOT) ? realpathSync(RAW_REPO_ROOT) : RAW_REPO_ROOT;
 const GOVERNOR_DIR = path.join(REPO_ROOT, ".governor", "contracts");
 const MAX_DIFF_BYTES = 200_000;
+const MAX_SPECIALIST_OUTPUT_CHARS = 20_000;
+const MAX_ACCUMULATED_CONTEXT_CHARS = 60_000;
 const MAX_REVIEW_CYCLES = 3;
 const MAX_STORED_CONTRACTS = 50;
+const BLOCKED_PROOF_FLAGS = new Set([
+    "-e",
+    "--eval",
+    "-p",
+    "--print",
+    "-c",
+    "--command",
+    "exec",
+    "--call",
+    "-i",
+    "--interactive"
+]);
 /**
  * Zero-Trust Subprocess Runner: NEVER invokes /bin/sh.
  * Passes arguments strictly as an argv array and pipes payloads via stdin.
@@ -42,6 +57,11 @@ export function runCommandSafe(command, args, options = {}) {
             if (stderr.length < MAX_DIFF_BYTES)
                 stderr += chunk.toString("utf8");
         });
+        child.stdin.on("error", (err) => {
+            if (err.code !== "EPIPE" && err.code !== "ERR_STREAM_DESTROYED") {
+                stderr += `\nStdin stream error: ${err.message}`;
+            }
+        });
         child.on("error", (err) => {
             clearTimeout(timer);
             resolve({ exitCode: 127, stdout, stderr: `${stderr}\nSpawn error: ${err.message}` });
@@ -56,18 +76,27 @@ export function runCommandSafe(command, args, options = {}) {
             }
         });
         if (stdinData !== undefined) {
-            child.stdin.write(stdinData, "utf8");
+            child.stdin.end(stdinData, "utf8");
         }
-        child.stdin.end();
+        else {
+            child.stdin.end();
+        }
     });
 }
 /**
- * Ensures requested file paths stay strictly inside REPO_ROOT.
+ * Ensures requested file paths stay strictly inside REPO_ROOT (including symlink resolution).
  */
 export function resolveSafeRepoPath(relativePath) {
     const resolved = path.resolve(REPO_ROOT, relativePath);
     if (!resolved.startsWith(REPO_ROOT + path.sep) && resolved !== REPO_ROOT) {
         throw new Error(`Security Violation: Path traversal outside repository root is forbidden: ${relativePath}`);
+    }
+    if (existsSync(resolved)) {
+        const realTarget = realpathSync(resolved);
+        if (!realTarget.startsWith(REPO_ROOT + path.sep) && realTarget !== REPO_ROOT) {
+            throw new Error(`Security Violation: Symlink escape outside repository root is forbidden: ${relativePath}`);
+        }
+        return realTarget;
     }
     return resolved;
 }
@@ -100,7 +129,7 @@ export class KirbyGovernorServer {
     constructor() {
         this.server = new McpServer({
             name: "kirby-governor-mcp",
-            version: "2.0.0"
+            version: "2.0.1"
         });
         this.registerTools();
     }
@@ -110,13 +139,23 @@ export class KirbyGovernorServer {
             const jsonFiles = entries.filter((f) => f.endsWith(".json"));
             if (jsonFiles.length <= MAX_STORED_CONTRACTS)
                 return;
-            const stats = await Promise.all(jsonFiles.map(async (f) => {
+            const records = await Promise.all(jsonFiles.map(async (f) => {
                 const full = path.join(GOVERNOR_DIR, f);
                 const st = await fs.stat(full);
-                return { full, mtimeMs: st.mtimeMs };
+                let status = "PASSED";
+                try {
+                    const parsed = JSON.parse(await fs.readFile(full, "utf8"));
+                    status = parsed.status;
+                }
+                catch {
+                    // Corrupt file can be pruned
+                }
+                return { full, mtimeMs: st.mtimeMs, status };
             }));
-            stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
-            for (const old of stats.slice(MAX_STORED_CONTRACTS)) {
+            // Only prune contracts that have already PASSED so ACTIVE/ESCALATED circuit breakers cannot be evicted
+            const prunable = records.filter((r) => r.status === "PASSED").sort((a, b) => a.mtimeMs - b.mtimeMs);
+            const excessCount = jsonFiles.length - MAX_STORED_CONTRACTS;
+            for (const old of prunable.slice(0, Math.max(0, excessCount))) {
                 await fs.unlink(old.full).catch(() => { });
             }
         }
@@ -154,35 +193,56 @@ export class KirbyGovernorServer {
             ...candidates.filter((c) => c.family !== primaryFamily),
             ...candidates.filter((c) => c.family === primaryFamily)
         ];
+        const locatorBin = process.platform === "win32" ? "where" : "which";
         for (const candidate of ordered) {
-            const check = await runCommandSafe("which", [candidate.cmd], { timeoutMs: 3_000 });
+            const check = await runCommandSafe(locatorBin, [candidate.cmd], { timeoutMs: 3_000 });
             if (check.exitCode === 0)
                 return candidate;
         }
         throw new Error("No supported external judge CLI (codex, reasonix, claude) found in PATH.");
     }
     /**
-     * Captures tracked, staged, and untracked changes against base_sha while excluding lockfiles.
+     * Captures tracked, staged, and untracked changes against base_sha without permanently mutating git index.
      */
     async extractCleanDiff(baseSha) {
-        await runCommandSafe("git", ["add", "-N", "."], { timeoutMs: 10_000 });
-        const diffArgs = [
-            "diff",
-            baseSha,
-            "--",
-            ".",
-            ":(exclude)package-lock.json",
-            ":(exclude)pnpm-lock.yaml",
-            ":(exclude)yarn.lock",
-            ":(exclude)bun.lockb",
-            ":(exclude)dist/**",
-            ":(exclude)build/**",
-            ":(exclude).governor/**"
-        ];
-        const res = await runCommandSafe("git", diffArgs, { timeoutMs: 15_000 });
-        const rawDiff = res.stdout.slice(0, MAX_DIFF_BYTES);
-        const treeHash = crypto.createHash("sha256").update(rawDiff).digest("hex");
-        return { diff: rawDiff, treeHash };
+        const untrackedRes = await runCommandSafe("git", ["ls-files", "--others", "--exclude-standard"], {
+            timeoutMs: 10_000
+        });
+        const untrackedFiles = untrackedRes.stdout
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter((f) => Boolean(f) && !f.startsWith(".governor/"));
+        if (untrackedFiles.length > 0) {
+            await runCommandSafe("git", ["add", "-N", "--", ...untrackedFiles], { timeoutMs: 10_000 });
+        }
+        try {
+            const diffArgs = [
+                "diff",
+                baseSha,
+                "--",
+                ".",
+                ":(exclude)package-lock.json",
+                ":(exclude)pnpm-lock.yaml",
+                ":(exclude)yarn.lock",
+                ":(exclude)bun.lockb",
+                ":(exclude)dist/**",
+                ":(exclude)build/**",
+                ":(exclude).governor/**"
+            ];
+            const res = await runCommandSafe("git", diffArgs, { timeoutMs: 15_000 });
+            const fullDiff = res.stdout;
+            const treeHash = crypto.createHash("sha256").update(fullDiff).digest("hex");
+            const truncated = fullDiff.length > MAX_DIFF_BYTES;
+            const diff = truncated
+                ? `${fullDiff.slice(0, MAX_DIFF_BYTES)}\n\n[DIFF TRUNCATED AT ${MAX_DIFF_BYTES} BYTES — REMAINING CONTENT OMITTED]`
+                : fullDiff;
+            return { diff, treeHash, truncated };
+        }
+        finally {
+            if (untrackedFiles.length > 0) {
+                await runCommandSafe("git", ["reset", "-q", "--", ...untrackedFiles], { timeoutMs: 10_000 });
+            }
+        }
     }
     registerTools() {
         // TOOL 1: Compile & Lock Execution Contract (Altitude + Depth)
@@ -204,11 +264,29 @@ export class KirbyGovernorServer {
                 proof_command: z.string().min(2).describe("(4) Exact CLI test command (e.g. 'npm test') that proves completion [06:26]")
             })
         }, async (input) => {
+            let existing = null;
+            try {
+                existing = await this.loadContract(input.contract_id);
+            }
+            catch {
+                existing = null;
+            }
+            if (existing && (existing.status !== "ACTIVE" || existing.review_cycle_count > 0)) {
+                return {
+                    isError: true,
+                    content: [
+                        {
+                            type: "text",
+                            text: `CONTRACT IMMUTABILITY LOCK: Contract '${input.contract_id}' already has status '${existing.status}' (cycle ${existing.review_cycle_count}/${MAX_REVIEW_CYCLES}). You cannot reset the circuit breaker by re-compiling the same contract_id.`
+                        }
+                    ]
+                };
+            }
             const headRes = await runCommandSafe("git", ["rev-parse", "HEAD"], { timeoutMs: 5_000 });
-            const baseSha = headRes.exitCode === 0 ? headRes.stdout.trim() : "HEAD";
+            const baseSha = existing?.base_sha || (headRes.exitCode === 0 ? headRes.stdout.trim() : "HEAD");
             const record = {
                 contract_id: input.contract_id,
-                created_at: new Date().toISOString(),
+                created_at: existing?.created_at || new Date().toISOString(),
                 base_sha: baseSha,
                 task_type: input.task_type,
                 raw_task: input.raw_task,
@@ -217,7 +295,7 @@ export class KirbyGovernorServer {
                 empirical_gate: input.empirical_gate,
                 review_cycle_count: 0,
                 status: "ACTIVE",
-                history: []
+                history: existing?.history || []
             };
             await this.saveContractAtomically(record);
             return {
@@ -282,9 +360,10 @@ export class KirbyGovernorServer {
                 };
             }
             catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
                 return {
                     isError: true,
-                    content: [{ type: "text", text: `Telemetry error: ${error.message}` }]
+                    content: [{ type: "text", text: `Telemetry error: ${message}` }]
                 };
             }
         });
@@ -323,6 +402,18 @@ export class KirbyGovernorServer {
                         content: [{ type: "text", text: `Security Gate: proof_command binary '${proofCmd}' is not in the allowlist.` }]
                     };
                 }
+                const blockedArg = proofArgs.find((arg) => BLOCKED_PROOF_FLAGS.has(arg) || /^-(e|p|c)/.test(arg));
+                if (blockedArg) {
+                    return {
+                        isError: true,
+                        content: [
+                            {
+                                type: "text",
+                                text: `Security Gate: proof_command argument '${blockedArg}' is forbidden (inline code execution flags are prohibited).`
+                            }
+                        ]
+                    };
+                }
                 const proofRes = await runCommandSafe(proofCmd, proofArgs, { timeoutMs: 90_000 });
                 if (proofRes.exitCode !== 0) {
                     return {
@@ -359,7 +450,7 @@ export class KirbyGovernorServer {
                     "1. Tag every blocking defect with its 3D axis: [MEMORY], [CONCURRENCY], [FAILURE], or [SHALLOW-SPEC].",
                     "2. Prefix every blocking defect with: 'BLOCKING ISSUE: [file:line] - <axis> <description & repro>'.",
                     "3. If tests are mocked to force a fake pass or ignore the unreasonable_target, REJECT immediately.",
-                    "4. If and only if zero blocking issues exist, end your output with the exact line: 'VERDICT: PASS'. Otherwise end with: 'VERDICT: REJECT'.",
+                    "4. If and only if zero blocking issues exist, end your output with the exact final line: 'VERDICT: PASS'. Otherwise end with: 'VERDICT: REJECT'.",
                     "",
                     "=== GIT DIFF ===",
                     diff
@@ -380,7 +471,12 @@ export class KirbyGovernorServer {
                     };
                 }
                 const output = judgeRes.stdout.trim();
-                const passed = output.includes("VERDICT: PASS") && !output.includes("BLOCKING ISSUE:");
+                const nonEmptyLines = output
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter(Boolean);
+                const lastLine = nonEmptyLines.length > 0 ? nonEmptyLines[nonEmptyLines.length - 1] : "";
+                const passed = /^VERDICT:\s*PASS$/i.test(lastLine) && !/^BLOCKING ISSUE:/im.test(output);
                 if (passed) {
                     contract.status = "PASSED";
                     contract.verified_tree_hash = treeHash;
@@ -423,6 +519,7 @@ export class KirbyGovernorServer {
         // TOOL 4: Orchestrate Range Crew (Noun-to-Verb Multi-Disciplinary Pipeline [08:22-10:01])
         this.server.tool("orchestrate_range_crew", "Executes Felix Rieseberg's Range workflow: reframes the app from nouns to human-outcome verbs and runs a sequential multi-disciplinary specialist crew over the diff.", {
             contract_id: z.string().regex(/^[a-zA-Z0-9_-]{3,64}$/),
+            primary_agent_family: z.enum(["claude", "codex", "gemini", "other"]).default("claude"),
             verb_reframing: z.string().min(15).describe("What the system DOES for humans (verbs, not nouns) [09:01]"),
             specialist_crew: z
                 .array(z.object({
@@ -431,35 +528,66 @@ export class KirbyGovernorServer {
             }))
                 .min(2)
                 .max(4)
-        }, async ({ contract_id, verb_reframing, specialist_crew }) => {
-            const contract = await this.loadContract(contract_id);
-            const { diff } = await this.extractCleanDiff(contract.base_sha);
-            const judge = await this.selectOutsideJudgeCli("claude");
-            const findingsReport = [
-                `# RANGE CREW SEQUENTIAL AUDIT (${contract_id})`,
-                `**Verb Reframing:** ${verb_reframing}\n`
-            ];
-            let accumulatedContext = "";
-            for (const [idx, specialist] of specialist_crew.entries()) {
-                const prompt = [
-                    `RANGE SPECIALIST PASS ${idx + 1}/${specialist_crew.length}: ${specialist.discipline}`,
-                    `System Human-Outcome Verb Goal: "${verb_reframing}"`,
-                    `Mandatory Domain Methods to Apply (Do NOT roleplay tone; execute these methods): ${specialist.domain_methods}`,
-                    accumulatedContext ? `\nPrior Crew Findings:\n${accumulatedContext}` : "",
-                    "\nInspect the following diff through your discipline's methods and list concrete, non-overlapping defects and required fixes:",
-                    diff
-                ].join("\n");
-                const res = await runCommandSafe(judge.cmd, judge.args, {
-                    stdinData: prompt,
-                    timeoutMs: 90_000
-                });
-                const stepOutput = res.stdout.trim() || res.stderr.trim();
-                accumulatedContext += `\n[${specialist.discipline}]:\n${stepOutput}\n`;
-                findingsReport.push(`## Pass ${idx + 1}: ${specialist.discipline}\n${stepOutput}\n`);
+        }, async ({ contract_id, primary_agent_family, verb_reframing, specialist_crew }) => {
+            if (this.activeLocks.has(contract_id)) {
+                return {
+                    isError: true,
+                    content: [{ type: "text", text: `CONCURRENCY LOCK: Operation already in progress for ${contract_id}.` }]
+                };
             }
-            return {
-                content: [{ type: "text", text: findingsReport.join("\n") }]
-            };
+            this.activeLocks.add(contract_id);
+            try {
+                const contract = await this.loadContract(contract_id);
+                if (contract.status === "ESCALATED") {
+                    return {
+                        isError: true,
+                        content: [
+                            {
+                                type: "text",
+                                text: `ESCALATE_TO_HUMAN: Contract '${contract_id}' is ESCALATED. Resolve with human review before running Range crew.`
+                            }
+                        ]
+                    };
+                }
+                const { diff } = await this.extractCleanDiff(contract.base_sha);
+                const judge = await this.selectOutsideJudgeCli(primary_agent_family);
+                const findingsReport = [
+                    `# RANGE CREW SEQUENTIAL AUDIT (${contract_id})`,
+                    `**Verb Reframing:** ${verb_reframing}\n`
+                ];
+                let accumulatedContext = "";
+                for (const [idx, specialist] of specialist_crew.entries()) {
+                    const prompt = [
+                        `RANGE SPECIALIST PASS ${idx + 1}/${specialist_crew.length}: ${specialist.discipline}`,
+                        `System Human-Outcome Verb Goal: "${verb_reframing}"`,
+                        `Mandatory Domain Methods to Apply (Do NOT roleplay tone; execute these methods): ${specialist.domain_methods}`,
+                        accumulatedContext ? `\nPrior Crew Findings:\n${accumulatedContext}` : "",
+                        "\nInspect the following diff through your discipline's methods and list concrete, non-overlapping defects and required fixes:",
+                        diff
+                    ].join("\n");
+                    const res = await runCommandSafe(judge.cmd, judge.args, {
+                        stdinData: prompt,
+                        timeoutMs: 90_000
+                    });
+                    const rawStepOutput = res.stdout.trim() || res.stderr.trim();
+                    const stepOutput = rawStepOutput.slice(0, MAX_SPECIALIST_OUTPUT_CHARS);
+                    accumulatedContext = `${accumulatedContext}\n[${specialist.discipline}]:\n${stepOutput}\n`.slice(-MAX_ACCUMULATED_CONTEXT_CHARS);
+                    findingsReport.push(`## Pass ${idx + 1}: ${specialist.discipline}\n${stepOutput}\n`);
+                }
+                return {
+                    content: [{ type: "text", text: findingsReport.join("\n") }]
+                };
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                return {
+                    isError: true,
+                    content: [{ type: "text", text: `Range crew orchestration error: ${message}` }]
+                };
+            }
+            finally {
+                this.activeLocks.delete(contract_id);
+            }
         });
     }
     async start() {

@@ -1,16 +1,26 @@
 {
   "name": "kirby-governor-mcp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Kirby Autonomous Engineering Governor MCP Server (Altitude, Depth, Range, Grounding Triad & Cross-Model Verification)",
   "type": "module",
   "main": "dist/server.js",
   "bin": {
     "kirby-governor-mcp": "dist/server.js"
   },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "references",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/server.js",
-    "test": "node --test tests/server.test.mjs"
+    "test": "npm run build && node --test tests/server.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

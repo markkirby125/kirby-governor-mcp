@@ -43,7 +43,7 @@ export declare function runCommandSafe(command: string, args: string[], options?
     cwd?: string;
 }): Promise<ExecResult>;
 /**
- * Ensures requested file paths stay strictly inside REPO_ROOT.
+ * Ensures requested file paths stay strictly inside REPO_ROOT (including symlink resolution).
  */
 export declare function resolveSafeRepoPath(relativePath: string): string;
 /**
@@ -62,7 +62,7 @@ export declare class KirbyGovernorServer {
      */
     private selectOutsideJudgeCli;
     /**
-     * Captures tracked, staged, and untracked changes against base_sha while excluding lockfiles.
+     * Captures tracked, staged, and untracked changes against base_sha without permanently mutating git index.
      */
     private extractCleanDiff;
     private registerTools;

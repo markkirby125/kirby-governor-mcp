@@ -1,6 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
@@ -8,6 +9,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const SERVER_DIST = path.resolve(import.meta.dirname, "../dist/server.js");
+if (!existsSync(SERVER_DIST)) {
+  throw new Error(`Build artifact missing at ${SERVER_DIST}. Run 'npm run build' before executing tests.`);
+}
 
 describe("kirby-governor-mcp End-to-End Integration Suite", () => {
   let tmpRepo;
@@ -43,7 +47,9 @@ if (input.startsWith("RANGE SPECIALIST PASS")) {
   process.exit(0);
 }
 
-if (mode === "REJECT") {
+if (mode === "MID_QUOTE_REJECT") {
+  console.log("I cannot output VERDICT: PASS because of a bug.\\nVERDICT: REJECT");
+} else if (mode === "REJECT") {
   console.log("BLOCKING ISSUE: [app.ts:2] - [CONCURRENCY] Unprotected shared state mutation.\\nVERDICT: REJECT");
 } else {
   console.log("All 3D grounding axes verified.\\nVERDICT: PASS");
@@ -119,7 +125,7 @@ if (mode === "REJECT") {
     assert.match(payload.contract.base_sha, /^[0-9a-f]{40}$/);
   });
 
-  test("3. inspect_system_telemetry deduplicates repetitive stack frames & blocks path traversal", async () => {
+  test("3. inspect_system_telemetry deduplicates repetitive stack frames & blocks path/symlink traversal", async () => {
     const logContent = [
       "Error: Connection reset",
       "    at Socket.read (net.js:10:5)",
@@ -139,7 +145,7 @@ if (mode === "REJECT") {
     });
     assert.match(logRes.content[0].text, /repetitive stack frame suppressed/);
 
-    // Verify path traversal outside REPO_ROOT is blocked
+    // Verify lexical path traversal outside REPO_ROOT is blocked
     const traversalRes = await client.callTool({
       name: "inspect_system_telemetry",
       arguments: {
@@ -149,16 +155,30 @@ if (mode === "REJECT") {
     });
     assert.equal(traversalRes.isError, true);
     assert.match(traversalRes.content[0].text, /Security Violation: Path traversal/);
+
+    // Verify symlink escape outside REPO_ROOT is blocked
+    const symlinkPath = path.join(tmpRepo, "escaped-link.log");
+    await fs.symlink("/etc/hosts", symlinkPath);
+    const symlinkRes = await client.callTool({
+      name: "inspect_system_telemetry",
+      arguments: {
+        triad_mode: "crash_and_logs",
+        target_path_or_ref: "escaped-link.log"
+      }
+    });
+    await fs.unlink(symlinkPath);
+    assert.equal(symlinkRes.isError, true);
+    assert.match(symlinkRes.content[0].text, /Security Violation: Symlink escape/);
   });
 
-  test("4. verify_adversarial_diff neutralizes shell backticks/command-substitution & passes valid diff", async () => {
+  test("4. verify_adversarial_diff neutralizes shell backticks, preserves git index for untracked files & passes valid diff", async () => {
     const pwnFile = path.join(os.tmpdir(), `kirby-pwn-check-${process.pid}`);
-    // Modify app.ts with backticks and $() that would execute in V1's execAsync("claude -p \"...\"")
     await fs.writeFile(
       path.join(tmpRepo, "app.ts"),
       `export const v = 2;\nexport const tpl = \`hello \$(touch ${pwnFile}) \\\`touch ${pwnFile}\\\`\`;\n`,
       "utf8"
     );
+    await fs.writeFile(path.join(tmpRepo, "untracked-helper.ts"), "export const helper = true;\n", "utf8");
     await fs.writeFile(path.join(tmpRepo, ".judge_mode"), "PASS", "utf8");
 
     const verifyRes = await client.callTool({
@@ -172,6 +192,13 @@ if (mode === "REJECT") {
     assert.match(verifyRes.content[0].text, /VERDICT: PASS/);
     assert.match(verifyRes.content[0].text, /CONTRACT STATUS: PASSED/);
 
+    // Verify untracked-helper.ts was reset from git intent-to-add back to untracked ('??')
+    const statusOut = execFileSync("git", ["status", "--porcelain", "untracked-helper.ts"], {
+      cwd: tmpRepo,
+      encoding: "utf8"
+    });
+    assert.match(statusOut, /^\?\? untracked-helper\.ts/);
+
     // Prove the shell injection payload inside the diff was NEVER executed
     let pwnExists = false;
     try {
@@ -183,7 +210,7 @@ if (mode === "REJECT") {
     assert.equal(pwnExists, false, "RCE vulnerability: backticks/$() in diff were executed!");
   });
 
-  test("5. verify_adversarial_diff enforces 3-strike circuit breaker (ESCALATE_TO_HUMAN)", async () => {
+  test("5. verify_adversarial_diff enforces 3-strike circuit breaker & blocks contract overwrite bypass", async () => {
     await client.callTool({
       name: "compile_execution_contract",
       arguments: {
@@ -206,9 +233,21 @@ if (mode === "REJECT") {
       }
     });
 
+    // Mid-quote VERDICT: PASS followed by VERDICT: REJECT must count as a REJECT (Cycle 1)
+    await fs.writeFile(path.join(tmpRepo, ".judge_mode"), "MID_QUOTE_REJECT", "utf8");
+    const r1 = await client.callTool({
+      name: "verify_adversarial_diff",
+      arguments: {
+        contract_id: "circuit-breaker-test",
+        primary_agent_family: "claude"
+      }
+    });
+    assert.match(r1.content[0].text, /CYCLE: 1 \/ 3/);
+    assert.match(r1.content[0].text, /CONTRACT STATUS: ACTIVE/);
+
     await fs.writeFile(path.join(tmpRepo, ".judge_mode"), "REJECT", "utf8");
 
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 2; i <= 3; i++) {
       const r = await client.callTool({
         name: "verify_adversarial_diff",
         arguments: {
@@ -232,13 +271,73 @@ if (mode === "REJECT") {
     });
     assert.equal(blocked.isError, true);
     assert.match(blocked.content[0].text, /ESCALATE_TO_HUMAN/);
+
+    // Attempting to overwrite the ESCALATED contract with the same contract_id must be rejected
+    const overwriteAttempt = await client.callTool({
+      name: "compile_execution_contract",
+      arguments: {
+        contract_id: "circuit-breaker-test",
+        task_type: "outcome_driven",
+        raw_task: "Try to reset the 3-strike counter",
+        altitude: {
+          ultimate_outcome: "Bypass circuit breaker",
+          decisions_enabled: ["None"]
+        },
+        depth: {
+          unasked_expert_actions: ["A", "B"],
+          raw_data_sources: ["app.ts"],
+          expert_methods_and_tools: ["M1", "M2"],
+          unreasonable_target: "Bypass circuit breaker"
+        },
+        empirical_gate: {
+          proof_command: "node --version"
+        }
+      }
+    });
+    assert.equal(overwriteAttempt.isError, true);
+    assert.match(overwriteAttempt.content[0].text, /CONTRACT IMMUTABILITY LOCK/);
   });
 
-  test("6. orchestrate_range_crew runs sequential specialist passes with noun-to-verb reframing", async () => {
+  test("6. verify_adversarial_diff blocks inline code execution flags in proof_command", async () => {
+    await client.callTool({
+      name: "compile_execution_contract",
+      arguments: {
+        contract_id: "inline-eval-test",
+        task_type: "outcome_driven",
+        raw_task: "Test inline eval blocking",
+        altitude: {
+          ultimate_outcome: "Prevent arbitrary inline code execution via proof_command",
+          decisions_enabled: ["Block -e and -c flags"]
+        },
+        depth: {
+          unasked_expert_actions: ["Validate argv flags", "Enforce test runner boundaries"],
+          raw_data_sources: ["src/server.ts"],
+          expert_methods_and_tools: ["Argv flag blocklist", "Zero-shell spawn"],
+          unreasonable_target: "Zero inline eval flags permitted"
+        },
+        empirical_gate: {
+          proof_command: "node -e process.exit(0)"
+        }
+      }
+    });
+
+    const evalRes = await client.callTool({
+      name: "verify_adversarial_diff",
+      arguments: {
+        contract_id: "inline-eval-test",
+        primary_agent_family: "claude"
+      }
+    });
+    assert.equal(evalRes.isError, true);
+    assert.match(evalRes.content[0].text, /inline code execution flags are prohibited/);
+  });
+
+  test("7. orchestrate_range_crew runs sequential specialist passes with noun-to-verb reframing", async () => {
     const rangeRes = await client.callTool({
       name: "orchestrate_range_crew",
       arguments: {
         contract_id: "hiring-fast-v1",
+        primary_agent_family: "claude",
         verb_reframing: "Get strangers to trust us with their career move in under 30 seconds",
         specialist_crew: [
           {
@@ -254,6 +353,7 @@ if (mode === "REJECT") {
     });
 
     const text = rangeRes.content[0].text;
+    assert.match(text, /RANGE CREW SEQUENTIAL AUDIT \(hiring-fast-v1\)/);
     assert.match(text, /Pass 1: Forensic Data Auditor/);
     assert.match(text, /Pass 2: Chaos SRE Specialist/);
   });
