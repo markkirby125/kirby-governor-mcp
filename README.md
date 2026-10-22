@@ -15,7 +15,13 @@ Copy and paste this into any AI coding app (Cursor, Windsurf, Claude Code, Grok,
 
 ## Tools Exposed
 
-1. **`compile_execution_contract`**: Locks an outcome-anchored contract (Altitude + 4-Part Depth + Empirical Proof Command + `base_sha`) to `.governor/contracts/<id>.json`.
-2. **`inspect_system_telemetry`**: Implements the Grounding Triad (`crash_and_logs` with stack deduplication, `version_commit_map`, and `reproduce_and_test`).
-3. **`verify_adversarial_diff`**: Runs the deterministic `proof_command` pre-gate, extracts a lockfile-free git diff (including untracked files via `git add -N`), and pipes it over `stdin` to a cross-model outside judge CLI (`codex`, `reasonix`, `claude`) with a 3-strike `ESCALATE_TO_HUMAN` circuit breaker.
-4. **`orchestrate_range_crew`**: Reframes nouns into human-outcome verbs and executes a sequential multi-disciplinary specialist review pipeline.
+1. **`compile_execution_contract`**: Locks an outcome-anchored contract (Altitude + 4-Part Depth + Empirical Proof Command + `base_sha`) to `.governor/contracts/<id>.json` with circuit-breaker immutability protection.
+2. **`inspect_system_telemetry`**: Implements the Grounding Triad (`crash_and_logs` with stack deduplication & symlink-escape blocking, `version_commit_map`, and `reproduce_and_test`).
+3. **`verify_adversarial_diff`**: Runs the deterministic `proof_command` pre-gate (blocking inline eval flags), extracts a lockfile-free & secret-redacted git diff (preserving git index state for untracked files), short-circuits on matching `verified_tree_hash`, and pipes unverified diffs over `stdin` to a cross-model outside judge CLI (`codex`, `reasonix`, `zcode`, `claude`) with a 3-strike `ESCALATE_TO_HUMAN` circuit breaker.
+4. **`orchestrate_range_crew`**: Reframes nouns into human-outcome verbs and executes a sequential multi-disciplinary specialist review pipeline with bounded context windows.
+
+## Feature Switches (Environment Variables)
+
+- `KIRBY_GOVERNOR_REDACT_SECRETS` (default `"1"`): Excludes `.env*`/`*.pem`/`*.key` files and redacts inline API keys/tokens before dispatching diffs to external judge CLIs. Set to `"0"` to disable.
+- `KIRBY_GOVERNOR_CACHE_VERIFIED_DIFF` (default `"1"`): Short-circuits `verify_adversarial_diff` with zero LLM token burn when `status === "PASSED"` and the SHA-256 `treeHash` matches `verified_tree_hash`, while invalidating `PASSED` back to `ACTIVE` if post-pass file drift occurs. Set to `"0"` to disable.
+- `KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE` (default `"1"`): Includes `zcode` (`zcode -p -`) in the cross-model outside judge rotation. Set to `"0"` to disable.
