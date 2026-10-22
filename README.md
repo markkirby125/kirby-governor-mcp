@@ -22,6 +22,7 @@ Copy and paste this into any AI coding app (Cursor, Windsurf, Claude Code, Grok,
 
 ## Feature Switches (Environment Variables)
 
-- `KIRBY_GOVERNOR_REDACT_SECRETS` (default `"1"`): Excludes `.env*`/`*.pem`/`*.key` files and redacts inline API keys/tokens before dispatching diffs to external judge CLIs. Set to `"0"` to disable.
+- `KIRBY_GOVERNOR_REDACT_SECRETS` (default `"1"`): Excludes `.env*`/`*.pem`/`*.key` files and redacts known credential formats (PEM keys, OpenAI/Anthropic, GitHub, AWS, Google `AIza`, Slack, JWTs, and `SECRET`/`TOKEN`/`PASSWORD`/`API_KEY` assignments) before dispatching diffs to external judge CLIs. Note: redaction is pattern-based defense-in-depth; avoid committing custom unencrypted secret formats in tracked source files. Set to `"0"` to disable.
+- `KIRBY_GOVERNOR_EXCLUDE_SECRET_FILES` (default `"1"`): Independently controls pathspec exclusion of `.env*`, `*.pem`, and `*.key` files during diff extraction.
 - `KIRBY_GOVERNOR_CACHE_VERIFIED_DIFF` (default `"1"`): Short-circuits `verify_adversarial_diff` with zero LLM token burn when `status === "PASSED"` and the SHA-256 `treeHash` matches `verified_tree_hash`, while invalidating `PASSED` back to `ACTIVE` if post-pass file drift occurs. Set to `"0"` to disable.
 - `KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE` (default `"1"`): Includes `zcode` (`zcode -p -`) in the cross-model outside judge rotation. Set to `"0"` to disable.

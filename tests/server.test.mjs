@@ -511,38 +511,84 @@ if (mode === "EMPTY_STDOUT") {
     assert.match(corruptRes.content[0].text, /is corrupt or failed schema validation/);
   });
 
-  test("9. verify_adversarial_diff blocks inline code execution flags in proof_command", async () => {
+  test("9. verify_adversarial_diff blocks inline code execution flags (both space-separated and equals-form) in proof_command", async () => {
+    for (const [idx, badCmd] of [
+      "node -e process.exit(0)",
+      "node --eval=process.exit(0)",
+      "node --eval process.exit(0)",
+      "node --require=./evil.js app.ts",
+      "node --require ./evil.js app.ts",
+      "node -r ./evil.js app.ts",
+      "node --import=./evil.js app.ts",
+      "python3 -c print(1)"
+    ].entries()) {
+      const cid = `inline-eval-test-${idx}`;
+      await client.callTool({
+        name: "compile_execution_contract",
+        arguments: {
+          contract_id: cid,
+          task_type: "outcome_driven",
+          raw_task: "Test inline eval blocking",
+          altitude: {
+            ultimate_outcome: "Prevent arbitrary inline code execution via proof_command",
+            decisions_enabled: ["Block -e, --eval=, --require=, and -c flags"]
+          },
+          depth: {
+            unasked_expert_actions: ["Validate argv flags", "Enforce test runner boundaries"],
+            raw_data_sources: ["src/server.ts"],
+            expert_methods_and_tools: ["Argv flag blocklist", "Zero-shell spawn"],
+            unreasonable_target: "Zero inline eval flags permitted"
+          },
+          empirical_gate: {
+            proof_command: badCmd
+          }
+        }
+      });
+
+      const evalRes = await client.callTool({
+        name: "verify_adversarial_diff",
+        arguments: {
+          contract_id: cid,
+          primary_agent_family: "claude"
+        }
+      });
+      assert.equal(evalRes.isError, true, `Expected '${badCmd}' to be blocked`);
+      assert.match(evalRes.content[0].text, /inline code execution and module preload flags are prohibited/);
+    }
+
+    // Negative control: legitimate flags starting with r/c/p/i (e.g. --check, -run, -race) must NOT be over-blocked
+    await fs.writeFile(judgeModeFile, "PASS", "utf8");
     await client.callTool({
       name: "compile_execution_contract",
       arguments: {
-        contract_id: "inline-eval-test",
+        contract_id: "legit-flags-control",
         task_type: "outcome_driven",
-        raw_task: "Test inline eval blocking",
+        raw_task: "Verify legitimate flags pass the security gate",
         altitude: {
-          ultimate_outcome: "Prevent arbitrary inline code execution via proof_command",
-          decisions_enabled: ["Block -e and -c flags"]
+          ultimate_outcome: "Ensure go test -race / pytest -ra / node --check are never falsely blocked",
+          decisions_enabled: ["Allow non-eval flags"]
         },
         depth: {
-          unasked_expert_actions: ["Validate argv flags", "Enforce test runner boundaries"],
+          unasked_expert_actions: ["Test negative control", "Check exact short flag match"],
           raw_data_sources: ["src/server.ts"],
-          expert_methods_and_tools: ["Argv flag blocklist", "Zero-shell spawn"],
-          unreasonable_target: "Zero inline eval flags permitted"
+          expert_methods_and_tools: ["Exact flag set matching", "Integration test"],
+          unreasonable_target: "Zero false positives on standard test runner flags"
         },
         empirical_gate: {
-          proof_command: "node -e process.exit(0)"
+          proof_command: "node --check mock-nonexistent.js"
         }
       }
     });
 
-    const evalRes = await client.callTool({
+    const legitRes = await client.callTool({
       name: "verify_adversarial_diff",
       arguments: {
-        contract_id: "inline-eval-test",
+        contract_id: "legit-flags-control",
         primary_agent_family: "claude"
       }
     });
-    assert.equal(evalRes.isError, true);
-    assert.match(evalRes.content[0].text, /inline code execution flags are prohibited/);
+    assert.doesNotMatch(legitRes.content[0].text, /inline code execution and module preload flags are prohibited/);
+    assert.match(legitRes.content[0].text, /DETERMINISTIC PRE-GATE FAILED/);
   });
 
   test("10. orchestrate_range_crew runs sequential specialist passes with noun-to-verb reframing", async () => {
