@@ -673,14 +673,21 @@ export class KirbyGovernorServer {
             let res;
             if (judge.deliver === "attach") {
                 const payloadDir = path.join(GOVERNOR_ROOT_DIR, "judge");
-                await fs.mkdir(payloadDir, { recursive: true, mode: 0o700 });
-                const payloadPath = path.join(payloadDir, `payload-${process.pid}-${Date.now()}.txt`);
-                await fs.writeFile(payloadPath, payload, { encoding: "utf8", mode: 0o600 });
+                let payloadPath;
                 try {
+                    await fs.mkdir(payloadDir, { recursive: true, mode: 0o700 });
+                    payloadPath = path.join(payloadDir, `payload-${process.pid}-${Date.now()}.txt`);
+                    await fs.writeFile(payloadPath, payload, { encoding: "utf8", mode: 0o600 });
                     res = await runCommandSafe(judge.cmd, [...judge.args, "--attach", payloadPath], { timeoutMs });
                 }
+                catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    attempts.push(`${judge.name} could not run: ${msg}`);
+                    continue;
+                }
                 finally {
-                    await fs.rm(payloadPath, { force: true });
+                    if (payloadPath)
+                        await fs.rm(payloadPath, { force: true });
                 }
             }
             else {
@@ -1174,7 +1181,7 @@ export class KirbyGovernorServer {
                             text: [
                                 `OUTSIDE JUDGE: ${judge.name} (Primary Family: ${primary_agent_family})`,
                                 ...(judge.sameFamilyFallback
-                                    ? [`WARNING: Same-family judge fallback used (${judge.name}) because no alternative CLI family was found in PATH.`]
+                                    ? [`WARNING: Same-family judge fallback used (${judge.name}) because no judge from another model family produced output.`]
                                     : []),
                                 `CYCLE: ${contract.review_cycle_count} / ${MAX_REVIEW_CYCLES}`,
                                 `CONTRACT STATUS: ${contract.status}`,

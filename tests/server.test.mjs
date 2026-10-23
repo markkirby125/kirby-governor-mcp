@@ -695,4 +695,33 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
     assert.deepEqual(result.attempts, []);
   });
+
+  test("14. judge failover excludes zcode when KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE=0 even if zcode is on PATH", async () => {
+    process.env.KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE = "0";
+    try {
+      const { chain, result } = await runFailover([zcodeEmptyDir, reasonixDir], 5_000);
+      assert.equal(chain.some((candidate) => candidate.name === "zcode-cli"), false);
+      assert.equal(result.judge?.name, "reasonix-cli");
+      assert.deepEqual(result.attempts, []);
+    } finally {
+      delete process.env.KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE;
+    }
+  });
+
+  test("15. judge failover falls through to reasonix when the zcode payload cannot be written", async () => {
+    // A regular file where .governor should be makes the payload directory mkdir fail.
+    const governorDir = path.join(await fs.realpath(process.env.KIRBY_GOVERNOR_REPO_ROOT), ".governor");
+    await fs.rm(governorDir, { recursive: true, force: true });
+    await fs.writeFile(governorDir, "blocks payload directory", "utf8");
+    try {
+      const { chain, result } = await runFailover([zcodeEmptyDir, reasonixDir], 5_000);
+      assert.equal(chain[0].name, "zcode-cli");
+      assert.equal(result.judge?.name, "reasonix-cli");
+      assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+      assert.equal(result.attempts.length, 1);
+      assert.match(result.attempts[0], /zcode-cli could not run:/);
+    } finally {
+      await fs.rm(governorDir, { force: true });
+    }
+  });
 });

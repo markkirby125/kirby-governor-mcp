@@ -18,20 +18,20 @@ Copy and paste this into any AI coding app (Cursor, Windsurf, Claude Code, Grok,
 1. **`compile_execution_contract`**: Locks an outcome-anchored contract (Altitude + 4-Part Depth + Empirical Proof Command + `base_sha`) to `.governor/contracts/<id>.json` with circuit-breaker immutability protection.
 2. **`inspect_system_telemetry`**: Implements the Grounding Triad (`crash_and_logs` with stack deduplication & symlink-escape blocking, `version_commit_map`, and `reproduce_and_test`).
 3. **`verify_adversarial_diff`**: Runs the deterministic `proof_command` pre-gate (blocking inline eval flags), extracts a lockfile-free & secret-redacted git diff (preserving git index state for untracked files), short-circuits on matching `verified_tree_hash`, and sends unverified diffs to a cross-model outside judge chain: `zcode` first (diff attached as a file, because `zcode -p` ignores stdin), then `reasonix` with `deepseek-flash` as failover (diff over `stdin`), then `codex` and `claude`. A judge that exits with empty output hands the diff to the next one. The chain ends in `JUDGE_UNAVAILABLE` only when every judge fails. A 3-strike `ESCALATE_TO_HUMAN` circuit breaker applies.
-4. **`orchestrate_range_crew`**: Reframes nouns into human-outcome verbs and executes a sequential multi-disciplinary specialist review pipeline with bounded context windows.
+4. **`orchestrate_range_crew`**: Reframes nouns into human-outcome verbs and executes a sequential multi-disciplinary specialist review pipeline with bounded context windows. Its judge step uses the same outside judge chain, with a 90-second timeout per judge.
 
 ## Outside Judge Chain
 
 `verify_adversarial_diff` sends unverified diffs to an outside judge CLI from a different model family than the primary agent. Candidates run in this order:
 
-1. **`zcode`** (`zcode-cli`): the diff is written to a temporary file and passed with `--attach`, because `zcode -p` ignores stdin. The file is deleted after the call.
+1. **`zcode`** (`zcode-cli`): the diff is written to a payload file under `.governor/judge/` and passed with `--attach`, because `zcode -p` ignores stdin. It runs as `zcode -p <judge prompt> --mode build --attach <file>`. The file is deleted after the call.
 2. **`reasonix`** (`reasonix-cli`): runs as `reasonix -p --model deepseek-flash --output-format text`, with the diff on stdin.
 3. **`codex`** (`codex-cli`): runs as `codex exec -`, with the diff on stdin.
 4. **`claude`** (`claude-cli`): runs as `claude -p -`, with the diff on stdin.
 
-Only CLIs found on `PATH` are used. A candidate from the same model family as the primary agent is tried last.
+Unless `KIRBY_GOVERNOR_JUDGE_CMD` is set, only CLIs found on `PATH` are used. A candidate from the same model family as the primary agent is tried last.
 
-The chain moves on to the next judge when a judge produces empty stdout. That covers a non-zero exit with no output, a spawn error, and a 120-second timeout. The first judge that writes stdout is used. If every judge fails, the tool returns `JUDGE_UNAVAILABLE` with each attempt's reason.
+The chain moves on to the next judge when a judge produces empty stdout. That covers a non-zero exit with no output, a spawn error, a 120-second timeout, and a failure to write the zcode payload file. The first judge that writes stdout is used. If every judge fails, the tool returns `JUDGE_UNAVAILABLE` with each attempt's reason.
 
 Setting `KIRBY_GOVERNOR_JUDGE_CMD` replaces the whole chain with the single command you give (a JSON array or a shell-style string).
 
