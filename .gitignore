@@ -2,3 +2,5 @@ node_modules/
 .governor/
 *.log
 *.tmp.*
+.claude/
+.jevflow/
