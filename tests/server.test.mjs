@@ -743,7 +743,7 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     assert.deepEqual(await leftoverPayloads(), []);
   });
 
-  test("17. judge failover still falls through to reasonix when the zcode payload cannot be removed", async () => {
+  test("17. judge failover still falls through to reasonix when the zcode payload cannot be removed", { skip: process.getuid?.() === 0 && "root ignores chmod, so the payload cannot be made undeletable" }, async () => {
     // The stub locks its own payload directory, so the cleanup rm in runJudgeChain fails with EACCES.
     const undeletableDir = await writeStub(
       path.join(failoverRoot, "zcode-undeletable"),
