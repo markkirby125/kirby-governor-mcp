@@ -645,6 +645,11 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     return { chain, result };
   };
 
+  const leftoverPayloads = async () => {
+    const judgeDir = path.join(await fs.realpath(process.env.KIRBY_GOVERNOR_REPO_ROOT), ".governor", "judge");
+    return (await fs.readdir(judgeDir).catch(() => [])).filter((name) => name.startsWith("payload-"));
+  };
+
   before(async () => {
     failoverRoot = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-judge-failover-"));
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
@@ -676,6 +681,7 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
     assert.equal(result.attempts.length, 1);
     assert.match(result.attempts[0], /zcode-cli exited 1 with empty output/);
+    assert.deepEqual(await leftoverPayloads(), []);
   });
 
   test("12. judge failover falls through to reasonix when zcode times out", async () => {
@@ -684,7 +690,8 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     assert.equal(chain[0].name, "zcode-cli");
     assert.equal(result.judge?.name, "reasonix-cli");
     assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
-    assert.match(result.attempts[0], /zcode-cli exited 124 with empty output: Process timed out/);
+    assert.match(result.attempts[0], /zcode-cli timed out \(exit 124\)/);
+    assert.deepEqual(await leftoverPayloads(), []);
     assert.ok(Date.now() - started < 15_000, "a hung zcode must not stall the chain");
   });
 
@@ -723,5 +730,15 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     } finally {
       await fs.rm(governorDir, { force: true });
     }
+  });
+
+  test("16. judge failover treats a timed-out judge as failed even when it printed partial output", async () => {
+    const zcodePartialDir = await writeStub(path.join(failoverRoot, "zcode-partial"), "zcode", 'echo "PARTIAL VERDICT: PASS"\nsleep 30');
+    const { chain, result } = await runFailover([zcodePartialDir, reasonixDir], 1_000);
+    assert.equal(chain[0].name, "zcode-cli");
+    assert.equal(result.judge?.name, "reasonix-cli");
+    assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+    assert.match(result.attempts[0], /zcode-cli timed out \(exit 124\)/);
+    assert.deepEqual(await leftoverPayloads(), []);
   });
 });

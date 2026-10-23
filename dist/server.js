@@ -665,7 +665,7 @@ export class KirbyGovernorServer {
     }
     /**
      * Runs the judge chain in order and returns the first candidate that produces stdout.
-     * A candidate fails on spawn error, timeout, or non-zero exit with empty stdout; the next one is tried.
+     * A candidate fails on spawn error, timeout (even with partial stdout), or non-zero exit with empty stdout; the next one is tried.
      */
     async runJudgeChain(chain, payload, timeoutMs) {
         const attempts = [];
@@ -693,10 +693,15 @@ export class KirbyGovernorServer {
             else {
                 res = await runCommandSafe(judge.cmd, judge.args, { stdinData: payload, timeoutMs });
             }
+            const stderrHint = res.stderr.trim() ? `: ${res.stderr.trim().slice(0, 300)}` : "";
+            if (res.exitCode === 124) {
+                // A killed judge may have printed a partial answer; never accept it.
+                attempts.push(`${judge.name} timed out (exit 124)${stderrHint}`);
+                continue;
+            }
             if (res.stdout.trim()) {
                 return { judge, res, attempts };
             }
-            const stderrHint = res.stderr.trim() ? `: ${res.stderr.trim().slice(0, 300)}` : "";
             attempts.push(`${judge.name} exited ${res.exitCode} with empty output${stderrHint}`);
         }
         return { judge: null, res: null, attempts };

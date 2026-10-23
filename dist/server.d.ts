@@ -189,7 +189,7 @@ export declare class KirbyGovernorServer {
     private selectOutsideJudgeChain;
     /**
      * Runs the judge chain in order and returns the first candidate that produces stdout.
-     * A candidate fails on spawn error, timeout, or non-zero exit with empty stdout; the next one is tried.
+     * A candidate fails on spawn error, timeout (even with partial stdout), or non-zero exit with empty stdout; the next one is tried.
      */
     private runJudgeChain;
     /**
