@@ -26,6 +26,8 @@ jobs:
 
       - run: npm test
 
-      # npm test rebuilds dist/, so any diff means the committed dist/ is stale.
+      # npm test rebuilds dist/, so any tracked diff or untracked file under dist/ means the committed dist/ is stale.
       - name: Fail if committed dist/ is stale
-        run: git diff --exit-code -- dist
+        run: |
+          git diff --exit-code -- dist
+          test -z "$(git status --porcelain --untracked-files=all -- dist)"

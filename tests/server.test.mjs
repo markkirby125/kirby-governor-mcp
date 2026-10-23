@@ -645,10 +645,11 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     return { chain, result };
   };
 
-  const leftoverPayloads = async () => {
-    const judgeDir = path.join(await fs.realpath(process.env.KIRBY_GOVERNOR_REPO_ROOT), ".governor", "judge");
-    return (await fs.readdir(judgeDir).catch(() => [])).filter((name) => name.startsWith("payload-"));
-  };
+  const judgeDirPath = async () =>
+    path.join(await fs.realpath(process.env.KIRBY_GOVERNOR_REPO_ROOT), ".governor", "judge");
+
+  const leftoverPayloads = async () =>
+    (await fs.readdir(await judgeDirPath()).catch(() => [])).filter((name) => name.startsWith("payload-"));
 
   before(async () => {
     failoverRoot = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-judge-failover-"));
@@ -740,5 +741,28 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
     assert.match(result.attempts[0], /zcode-cli timed out \(exit 124\)/);
     assert.deepEqual(await leftoverPayloads(), []);
+  });
+
+  test("17. judge failover still falls through to reasonix when the zcode payload cannot be removed", async () => {
+    // The stub locks its own payload directory, so the cleanup rm in runJudgeChain fails with EACCES.
+    const undeletableDir = await writeStub(
+      path.join(failoverRoot, "zcode-undeletable"),
+      "zcode",
+      'for arg in "$@"; do last="$arg"; done\nchmod 555 "$(dirname "$last")"\necho "zcode stub: empty output" >&2\nexit 1'
+    );
+    const judgeDir = await judgeDirPath();
+    try {
+      const { chain, result } = await runFailover([undeletableDir, reasonixDir], 5_000);
+      assert.equal(chain[0].name, "zcode-cli");
+      assert.equal(result.judge?.name, "reasonix-cli");
+      assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+      assert.equal(result.attempts.length, 1);
+      assert.match(result.attempts[0], /zcode-cli exited 1 with empty output/);
+      // The payload is still present only because removal was denied, so the forced failure really happened.
+      assert.equal((await leftoverPayloads()).length, 1);
+    } finally {
+      await fs.chmod(judgeDir, 0o700);
+      for (const name of await leftoverPayloads()) await fs.rm(path.join(judgeDir, name), { force: true });
+    }
   });
 });

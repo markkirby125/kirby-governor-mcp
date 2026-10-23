@@ -686,8 +686,13 @@ export class KirbyGovernorServer {
                     continue;
                 }
                 finally {
-                    if (payloadPath)
-                        await fs.rm(payloadPath, { force: true });
+                    // Cleanup must never abort the chain: a judge verdict already in hand is still valid.
+                    if (payloadPath) {
+                        await fs.rm(payloadPath, { force: true }).catch((err) => {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            console.error(`[kirby-governor] Could not remove judge payload ${payloadPath}: ${msg}`);
+                        });
+                    }
                 }
             }
             else {

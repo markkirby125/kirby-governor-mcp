@@ -744,7 +744,13 @@ export class KirbyGovernorServer {
           attempts.push(`${judge.name} could not run: ${msg}`);
           continue;
         } finally {
-          if (payloadPath) await fs.rm(payloadPath, { force: true });
+          // Cleanup must never abort the chain: a judge verdict already in hand is still valid.
+          if (payloadPath) {
+            await fs.rm(payloadPath, { force: true }).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error(`[kirby-governor] Could not remove judge payload ${payloadPath}: ${msg}`);
+            });
+          }
         }
       } else {
         res = await runCommandSafe(judge.cmd, judge.args, { stdinData: payload, timeoutMs });
