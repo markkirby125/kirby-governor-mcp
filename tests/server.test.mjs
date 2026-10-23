@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -616,5 +617,82 @@ if (mode === "EMPTY_STDOUT") {
     assert.match(text, /RANGE CREW SEQUENTIAL AUDIT \(hiring-fast-v1\)/);
     assert.match(text, /Pass 1: Forensic Data Auditor/);
     assert.match(text, /Pass 2: Chaos SRE Specialist/);
+  });
+});
+
+describe("judge failover falls through to reasonix", { skip: process.platform === "win32" }, () => {
+  const ENV_KEYS = ["PATH", "KIRBY_GOVERNOR_REPO_ROOT", "KIRBY_GOVERNOR_JUDGE_CMD", "KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE"];
+  const savedEnv = {};
+  let failoverRoot;
+  let zcodeEmptyDir;
+  let zcodeHangDir;
+  let reasonixDir;
+  let KirbyGovernorServer;
+
+  const writeStub = async (dir, name, body) => {
+    await fs.mkdir(dir, { recursive: true });
+    const stubPath = path.join(dir, name);
+    await fs.writeFile(stubPath, `#!/bin/sh\n${body}\n`, "utf8");
+    await fs.chmod(stubPath, 0o755);
+    return dir;
+  };
+
+  const runFailover = async (pathDirs, timeoutMs) => {
+    process.env.PATH = [...pathDirs, "/usr/bin", "/bin"].join(path.delimiter);
+    const server = new KirbyGovernorServer();
+    const chain = await server.selectOutsideJudgeChain("claude");
+    const result = await server.runJudgeChain(chain, "PAYLOAD-FAILOVER", timeoutMs);
+    return { chain, result };
+  };
+
+  before(async () => {
+    failoverRoot = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-judge-failover-"));
+    for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+    process.env.KIRBY_GOVERNOR_REPO_ROOT = path.join(failoverRoot, "repo");
+    delete process.env.KIRBY_GOVERNOR_JUDGE_CMD;
+    delete process.env.KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE;
+    await fs.mkdir(process.env.KIRBY_GOVERNOR_REPO_ROOT, { recursive: true });
+
+    zcodeEmptyDir = await writeStub(path.join(failoverRoot, "zcode-empty"), "zcode", 'echo "zcode stub: empty output" >&2\nexit 1');
+    zcodeHangDir = await writeStub(path.join(failoverRoot, "zcode-hang"), "zcode", "sleep 30");
+    reasonixDir = await writeStub(path.join(failoverRoot, "reasonix"), "reasonix", 'printf "REASONIX_JUDGE:"\ncat');
+
+    // Imported after KIRBY_GOVERNOR_REPO_ROOT is set, since the module reads it at load time.
+    ({ KirbyGovernorServer } = await import(pathToFileURL(SERVER_DIST).href));
+  });
+
+  after(async () => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    await fs.rm(failoverRoot, { recursive: true, force: true });
+  });
+
+  test("11. judge failover falls through to reasonix when zcode returns empty output", async () => {
+    const { chain, result } = await runFailover([zcodeEmptyDir, reasonixDir], 5_000);
+    assert.equal(chain[0].name, "zcode-cli");
+    assert.equal(result.judge?.name, "reasonix-cli");
+    assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+    assert.equal(result.attempts.length, 1);
+    assert.match(result.attempts[0], /zcode-cli exited 1 with empty output/);
+  });
+
+  test("12. judge failover falls through to reasonix when zcode times out", async () => {
+    const started = Date.now();
+    const { chain, result } = await runFailover([zcodeHangDir, reasonixDir], 1_000);
+    assert.equal(chain[0].name, "zcode-cli");
+    assert.equal(result.judge?.name, "reasonix-cli");
+    assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+    assert.match(result.attempts[0], /zcode-cli exited 124 with empty output: Process timed out/);
+    assert.ok(Date.now() - started < 15_000, "a hung zcode must not stall the chain");
+  });
+
+  test("13. judge failover falls through to reasonix when zcode absent from PATH", async () => {
+    const { chain, result } = await runFailover([reasonixDir], 5_000);
+    assert.equal(chain.some((candidate) => candidate.name === "zcode-cli"), false);
+    assert.equal(result.judge?.name, "reasonix-cli");
+    assert.match(result.res?.stdout ?? "", /REASONIX_JUDGE:PAYLOAD-FAILOVER/);
+    assert.deepEqual(result.attempts, []);
   });
 });
