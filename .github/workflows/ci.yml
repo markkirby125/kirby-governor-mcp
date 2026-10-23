@@ -27,14 +27,15 @@ jobs:
       - run: npm test
 
       # npm test rebuilds dist/, so any tracked diff or untracked file under dist/ means the committed dist/ is stale.
-      # tsc never deletes output for a removed source, so every dist file must still have its src/*.ts.
+      # tsc never deletes output for a removed source, so every .js, .d.ts and .js.map under dist/ must still have its src/*.ts.
       - name: Fail if committed dist/ is stale
         run: |
           git diff --exit-code -- dist
           test -z "$(git status --porcelain --untracked-files=all -- dist)"
-          for f in dist/*.js dist/*.d.ts; do
+          while IFS= read -r f; do
             base="${f#dist/}"
+            base="${base%.js.map}"
             base="${base%.d.ts}"
             base="${base%.js}"
             test -f "src/$base.ts" || { echo "$f has no matching src/$base.ts"; exit 1; }
-          done
+          done < <(find dist -type f \( -name '*.js' -o -name '*.d.ts' -o -name '*.js.map' \))
