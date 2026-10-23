@@ -182,10 +182,16 @@ export declare class KirbyGovernorServer {
      */
     private findBinaryInPath;
     /**
-     * Selects a judge CLI from a DIFFERENT model family than the primary agent [08:01].
+     * Builds the ordered judge chain: zcode first, reasonix (deepseek-flash) as failover, then codex and claude.
+     * Candidates from a DIFFERENT model family than the primary agent come before same-family ones [08:01].
      * Reversible switch: set KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE=0 to exclude zcode-cli.
      */
-    private selectOutsideJudgeCli;
+    private selectOutsideJudgeChain;
+    /**
+     * Runs the judge chain in order and returns the first candidate that produces stdout.
+     * A candidate fails on spawn error, timeout, or non-zero exit with empty stdout; the next one is tried.
+     */
+    private runJudgeChain;
     /**
      * Captures tracked, staged, and untracked changes against base_sha using a throwaway GIT_INDEX_FILE
      * inside an isolated 0o700 mkdtemp directory so the user's real .git/index is NEVER mutated or locked.
