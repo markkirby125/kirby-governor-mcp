@@ -167,6 +167,28 @@ export declare function resolveSafeRepoPath(relativePath: string): string;
  * Deduplicates repetitive stack trace frames while preserving the leading exception header line.
  */
 export declare function deduplicateStackFrames(rawLog: string, maxLines?: number): string;
+export interface JudgeCandidate {
+    family: string;
+    name: string;
+    cmd: string;
+    args: string[];
+    /** "attach": payload is written to a file and passed via --attach (zcode -p ignores stdin). "stdin": payload goes to stdin. */
+    deliver: "stdin" | "attach";
+    sameFamilyFallback: boolean;
+}
+/** An accepted judge carries its result; a rejected one carries the reason the chain records. */
+export type JudgeAttemptOutcome = {
+    ok: true;
+    res: ExecResult;
+} | {
+    ok: false;
+    reason: string;
+};
+/**
+ * Decides whether one finished judge run counts. A timeout is rejected even with partial stdout,
+ * because a killed judge may have printed a truncated answer. Otherwise any stdout is accepted.
+ */
+export declare function classifyJudgeResult(judge: JudgeCandidate, res: ExecResult): JudgeAttemptOutcome;
 export declare class KirbyGovernorServer {
     private server;
     private activeLocks;

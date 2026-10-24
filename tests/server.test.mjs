@@ -766,3 +766,33 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     }
   });
 });
+
+describe("judge run classification", () => {
+  let classifyJudgeResult;
+  const judge = { family: "zcode", name: "zcode-cli", cmd: "zcode", args: [], deliver: "attach", sameFamilyFallback: false };
+  const run = (overrides) => ({ exitCode: 0, stdout: "", stderr: "", stdoutTruncated: false, stdoutSha256: "", ...overrides });
+
+  before(async () => {
+    ({ classifyJudgeResult } = await import(pathToFileURL(SERVER_DIST).href));
+  });
+
+  test("a timeout (exit 124) is rejected even when partial stdout was printed", () => {
+    const outcome = classifyJudgeResult(judge, run({ exitCode: 124, stdout: "VERDICT: PASS", stderr: "killed" }));
+    assert.deepEqual(outcome, { ok: false, reason: "zcode-cli timed out (exit 124): killed" });
+  });
+
+  test("a finished judge with any stdout is accepted", () => {
+    const res = run({ exitCode: 1, stdout: "VERDICT: PASS" });
+    assert.deepEqual(classifyJudgeResult(judge, res), { ok: true, res });
+  });
+
+  test("a non-zero exit with empty stdout is rejected and carries the stderr hint", () => {
+    const outcome = classifyJudgeResult(judge, run({ exitCode: 2, stderr: "boom" }));
+    assert.deepEqual(outcome, { ok: false, reason: "zcode-cli exited 2 with empty output: boom" });
+  });
+
+  test("whitespace-only stdout counts as empty", () => {
+    const outcome = classifyJudgeResult(judge, run({ exitCode: 0, stdout: "  \n" }));
+    assert.deepEqual(outcome, { ok: false, reason: "zcode-cli exited 0 with empty output" });
+  });
+});
