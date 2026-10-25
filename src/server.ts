@@ -546,7 +546,7 @@ export class KirbyGovernorServer {
   constructor() {
     this.server = new McpServer({
       name: "kirby-governor-mcp",
-      version: "2.2.4"
+      version: "2.3.0"
     });
     this.registerTools();
   }

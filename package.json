@@ -1,6 +1,6 @@
 {
   "name": "kirby-governor-mcp",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "description": "Kirby Autonomous Engineering Governor MCP Server (Altitude, Depth, Range, Grounding Triad & Cross-Model Verification)",
   "license": "MIT",
   "type": "module",
