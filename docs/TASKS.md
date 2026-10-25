@@ -11,6 +11,10 @@ Each task is one `###` entry with these fields, in this order:
 
 ## Open
 
+### 2026-10-25-zod4-audit-fix Upgrade zod and fix audit advisories for 2.3.0
+
+Status: in progress. Apply `npm audit fix` (body-parser 2.3.0 to 2.4.0, lockfile only) and zod ^4.6.7 (GHSA-mrhx-c7xc-m3w5), run tsc and npm test, bump to 2.3.0, tag and release. Tested on throwaway copies first: tsc clean, 21 of 21 tests pass, `dist/` identical. Known client-visible changes: tool JSON Schemas no longer advertise `additionalProperties: false`, and validation error wording changes.
+
 <!-- Add new entries above this line. Move finished entries to Done. -->
 
 ## Done

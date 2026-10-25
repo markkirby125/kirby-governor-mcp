@@ -26,120 +26,39 @@ export declare const ContractRecordSchema: z.ZodObject<{
     contract_id: z.ZodString;
     created_at: z.ZodString;
     base_sha: z.ZodString;
-    task_type: z.ZodEnum<["outcome_driven", "creative_exploratory"]>;
+    task_type: z.ZodEnum<{
+        outcome_driven: "outcome_driven";
+        creative_exploratory: "creative_exploratory";
+    }>;
     raw_task: z.ZodString;
     altitude: z.ZodObject<{
         ultimate_outcome: z.ZodString;
-        decisions_enabled: z.ZodArray<z.ZodString, "many">;
-    }, "strip", z.ZodTypeAny, {
-        ultimate_outcome: string;
-        decisions_enabled: string[];
-    }, {
-        ultimate_outcome: string;
-        decisions_enabled: string[];
-    }>;
+        decisions_enabled: z.ZodArray<z.ZodString>;
+    }, z.core.$strip>;
     depth: z.ZodObject<{
-        unasked_expert_actions: z.ZodArray<z.ZodString, "many">;
-        raw_data_sources: z.ZodArray<z.ZodString, "many">;
-        expert_methods_and_tools: z.ZodArray<z.ZodString, "many">;
+        unasked_expert_actions: z.ZodArray<z.ZodString>;
+        raw_data_sources: z.ZodArray<z.ZodString>;
+        expert_methods_and_tools: z.ZodArray<z.ZodString>;
         unreasonable_target: z.ZodString;
-    }, "strip", z.ZodTypeAny, {
-        unasked_expert_actions: string[];
-        raw_data_sources: string[];
-        expert_methods_and_tools: string[];
-        unreasonable_target: string;
-    }, {
-        unasked_expert_actions: string[];
-        raw_data_sources: string[];
-        expert_methods_and_tools: string[];
-        unreasonable_target: string;
-    }>;
+    }, z.core.$strip>;
     empirical_gate: z.ZodObject<{
         proof_command: z.ZodString;
-    }, "strip", z.ZodTypeAny, {
-        proof_command: string;
-    }, {
-        proof_command: string;
-    }>;
+    }, z.core.$strip>;
     review_cycle_count: z.ZodNumber;
     pregate_failure_count: z.ZodDefault<z.ZodOptional<z.ZodNumber>>;
-    status: z.ZodEnum<["ACTIVE", "PASSED", "ESCALATED"]>;
+    status: z.ZodEnum<{
+        ACTIVE: "ACTIVE";
+        PASSED: "PASSED";
+        ESCALATED: "ESCALATED";
+    }>;
     verified_tree_hash: z.ZodOptional<z.ZodString>;
     history: z.ZodArray<z.ZodObject<{
         cycle: z.ZodNumber;
         timestamp: z.ZodString;
         judge_cli: z.ZodString;
         verdict: z.ZodString;
-    }, "strip", z.ZodTypeAny, {
-        cycle: number;
-        timestamp: string;
-        judge_cli: string;
-        verdict: string;
-    }, {
-        cycle: number;
-        timestamp: string;
-        judge_cli: string;
-        verdict: string;
-    }>, "many">;
-}, "strip", z.ZodTypeAny, {
-    contract_id: string;
-    created_at: string;
-    base_sha: string;
-    task_type: "outcome_driven" | "creative_exploratory";
-    status: "ACTIVE" | "PASSED" | "ESCALATED";
-    raw_task: string;
-    altitude: {
-        ultimate_outcome: string;
-        decisions_enabled: string[];
-    };
-    depth: {
-        unasked_expert_actions: string[];
-        raw_data_sources: string[];
-        expert_methods_and_tools: string[];
-        unreasonable_target: string;
-    };
-    empirical_gate: {
-        proof_command: string;
-    };
-    review_cycle_count: number;
-    pregate_failure_count: number;
-    history: {
-        cycle: number;
-        timestamp: string;
-        judge_cli: string;
-        verdict: string;
-    }[];
-    verified_tree_hash?: string | undefined;
-}, {
-    contract_id: string;
-    created_at: string;
-    base_sha: string;
-    task_type: "outcome_driven" | "creative_exploratory";
-    status: "ACTIVE" | "PASSED" | "ESCALATED";
-    raw_task: string;
-    altitude: {
-        ultimate_outcome: string;
-        decisions_enabled: string[];
-    };
-    depth: {
-        unasked_expert_actions: string[];
-        raw_data_sources: string[];
-        expert_methods_and_tools: string[];
-        unreasonable_target: string;
-    };
-    empirical_gate: {
-        proof_command: string;
-    };
-    review_cycle_count: number;
-    history: {
-        cycle: number;
-        timestamp: string;
-        judge_cli: string;
-        verdict: string;
-    }[];
-    pregate_failure_count?: number | undefined;
-    verified_tree_hash?: string | undefined;
-}>;
+    }, z.core.$strip>>;
+}, z.core.$strip>;
 export type ContractRecord = z.infer<typeof ContractRecordSchema>;
 export interface ExecResult {
     exitCode: number;
