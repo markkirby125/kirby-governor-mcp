@@ -471,6 +471,8 @@ export interface JudgeCandidate {
   args: string[];
   /** "attach": payload is written to a file and passed via --attach (zcode -p ignores stdin). "stdin": payload goes to stdin. */
   deliver: "stdin" | "attach";
+  /** Overrides the chain's timeout for this judge. zcode runs its own review pass and can exceed the 120 s default. */
+  timeoutMs?: number;
   sameFamilyFallback: boolean;
 }
 
@@ -747,7 +749,8 @@ export class KirbyGovernorServer {
               name: "zcode-cli",
               cmd: "zcode",
               args: ["-p", ZCODE_JUDGE_PROMPT, "--mode", "build"],
-              deliver: "attach" as const
+              deliver: "attach" as const,
+              timeoutMs: 300_000
             }
           ]
         : []),
@@ -793,7 +796,7 @@ export class KirbyGovernorServer {
   ): Promise<{ judge: JudgeCandidate | null; res: ExecResult | null; attempts: string[] }> {
     const attempts: string[] = [];
     for (const judge of chain) {
-      const outcome = await runJudgeAttempt(judge, payload, timeoutMs);
+      const outcome = await runJudgeAttempt(judge, payload, judge.timeoutMs ?? timeoutMs);
       if (outcome.ok) {
         return { judge, res: outcome.res, attempts };
       }

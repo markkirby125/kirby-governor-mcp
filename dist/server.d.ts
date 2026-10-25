@@ -93,6 +93,8 @@ export interface JudgeCandidate {
     args: string[];
     /** "attach": payload is written to a file and passed via --attach (zcode -p ignores stdin). "stdin": payload goes to stdin. */
     deliver: "stdin" | "attach";
+    /** Overrides the chain's timeout for this judge. zcode runs its own review pass and can exceed the 120 s default. */
+    timeoutMs?: number;
     sameFamilyFallback: boolean;
 }
 /** An accepted judge carries its result; a rejected one carries the reason the chain records. */

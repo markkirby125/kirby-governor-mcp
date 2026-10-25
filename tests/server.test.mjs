@@ -641,6 +641,8 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
     process.env.PATH = [...pathDirs, "/usr/bin", "/bin"].join(path.delimiter);
     const server = new KirbyGovernorServer();
     const chain = await server.selectOutsideJudgeChain("claude");
+    // Pin every judge to the test timeout: zcode's production override (300 s) would otherwise win.
+    for (const judge of chain) judge.timeoutMs = timeoutMs;
     const result = await server.runJudgeChain(chain, "PAYLOAD-FAILOVER", timeoutMs);
     return { chain, result };
   };

@@ -692,7 +692,8 @@ export class KirbyGovernorServer {
                         name: "zcode-cli",
                         cmd: "zcode",
                         args: ["-p", ZCODE_JUDGE_PROMPT, "--mode", "build"],
-                        deliver: "attach"
+                        deliver: "attach",
+                        timeoutMs: 300_000
                     }
                 ]
                 : []),
@@ -730,7 +731,7 @@ export class KirbyGovernorServer {
     async runJudgeChain(chain, payload, timeoutMs) {
         const attempts = [];
         for (const judge of chain) {
-            const outcome = await runJudgeAttempt(judge, payload, timeoutMs);
+            const outcome = await runJudgeAttempt(judge, payload, judge.timeoutMs ?? timeoutMs);
             if (outcome.ok) {
                 return { judge, res: outcome.res, attempts };
             }
