@@ -11,15 +11,15 @@ Each task is one `###` entry with these fields, in this order:
 
 ## Open
 
-### 2026-10-25-zod4-audit-fix Upgrade zod and fix audit advisories for 2.3.0
-
-Status: in progress. Apply `npm audit fix` (body-parser 2.3.0 to 2.4.0, lockfile only) and zod ^4.6.7 (GHSA-mrhx-c7xc-m3w5), run tsc and npm test, bump to 2.3.0, tag and release. Tested on throwaway copies first: tsc clean, 21 of 21 tests pass, `dist/` identical. Known client-visible changes: tool JSON Schemas no longer advertise `additionalProperties: false`, and validation error wording changes.
-
 <!-- Add new entries above this line. Move finished entries to Done. -->
 
 ## Done
 
 <!-- Keep the entry; change Status to done. -->
+
+### 2026-10-25-zod4-audit-fix Upgrade zod and fix audit advisories for 2.3.0
+
+Status: done. zod ^3.23.8 to ^4.6.7 and `npm audit fix` (body-parser 2.4.0) committed as a52d43d; `npm audit` reports 0 vulnerabilities. Version bumped to 2.3.0 (b45f170), CI green, annotated tag v2.3.0 and GitHub release v2.3.0 created on 2026-10-25. Tested on throwaway copies first: tsc clean, 21 of 21 tests pass. Client-visible changes: tool JSON Schemas no longer advertise `additionalProperties: false`, validation error wording changes, and the exported `ContractRecordSchema` types use zod 4 types.
 
 ### 2026-10-24-judge-chain-refactor Judge chain refactor for v2.2.4
 
