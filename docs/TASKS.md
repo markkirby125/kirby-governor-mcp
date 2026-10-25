@@ -13,17 +13,17 @@ Each task is one `###` entry with these fields, in this order:
 
 <!-- Add new entries above this line. Move finished entries to Done. -->
 
-### 2026-10-24-judge-chain-refactor Judge chain refactor for v2.2.4
-
-Status: blocked: verify_adversarial_diff could not run from this session. The governor MCP server resolved its git root to /home/paulk, not this repo. Committed on refactor/judge-chain-split as 5514dc3; needs verify before merge.
-
-### 2026-10-24-v224-version-decision Decide version bump and tag for v2.2.4
-
-Status: todo. Package version is still 2.2.3. Needs the user: bump, tag and release are outward-facing.
-
 ## Done
 
 <!-- Keep the entry; change Status to done. -->
+
+### 2026-10-24-judge-chain-refactor Judge chain refactor for v2.2.4
+
+Status: done. Committed as 5514dc3. The in-session `verify_adversarial_diff` could not run (the server resolved its git root to /home/paulk, and it diffs against a baseline locked at HEAD), so the diff was checked with the outside judges directly: zCode and reasonix both returned PASS on `git diff origin/main...HEAD`. 21 of 21 tests pass and a fresh build leaves `dist/` unchanged. Fast-forward merged into main (bfde9dd) on 2026-10-25.
+
+### 2026-10-24-v224-version-decision Decide version bump and tag for v2.2.4
+
+Status: done. Bumped to 2.2.4 in package.json, package-lock.json, src/server.ts and the rebuilt dist/server.js (be29557). Annotated tag v2.2.4 and GitHub release v2.2.4 created on 2026-10-25; CI passed on be29557.
 
 ### 2026-10-24-dist-orphan-fixture Verify dist orphan check on fixtures
 
