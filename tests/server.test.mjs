@@ -618,6 +618,94 @@ if (mode === "EMPTY_STDOUT") {
     assert.match(text, /Pass 1: Forensic Data Auditor/);
     assert.match(text, /Pass 2: Chaos SRE Specialist/);
   });
+
+  test("10b. compile_execution_contract repo_path locks another repo's HEAD, rejects non-top-level paths, and verify reviews that repo's diff", async () => {
+    const compileArgs = (contract_id, extra = {}) => ({
+      name: "compile_execution_contract",
+      arguments: {
+        contract_id,
+        task_type: "outcome_driven",
+        raw_task: "Verify a sibling repository by repo_path",
+        altitude: {
+          ultimate_outcome: "Govern a submodule from the parent repository's governor server",
+          decisions_enabled: ["Lock base_sha to the submodule HEAD"]
+        },
+        depth: {
+          unasked_expert_actions: ["Reject subdirectories", "Reject missing paths"],
+          raw_data_sources: ["other.ts"],
+          expert_methods_and_tools: ["git rev-parse --show-toplevel", "git rev-parse --git-path index"],
+          unreasonable_target: "Zero cross-repository diff leakage"
+        },
+        empirical_gate: { proof_command: "node --version" },
+        ...extra
+      }
+    });
+    const contractFile = (id) => path.join(tmpRepo, ".governor", "contracts", `${id}.json`);
+    const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+    const otherRepo = path.join(tmpHarness, "other-repo");
+    await fs.mkdir(path.join(otherRepo, "sub"), { recursive: true });
+    git(otherRepo, "init", "-b", "main");
+    git(otherRepo, "config", "user.name", "Test User");
+    git(otherRepo, "config", "user.email", "test@example.com");
+    await fs.writeFile(path.join(otherRepo, "other.ts"), "export const other = 1;\n", "utf8");
+    await fs.writeFile(path.join(otherRepo, "sub", "keep.ts"), "export const keep = 1;\n", "utf8");
+    git(otherRepo, "add", ".");
+    git(otherRepo, "commit", "-m", "other initial commit");
+    const otherHead = git(otherRepo, "rev-parse", "HEAD");
+    const launchHead = git(tmpRepo, "rev-parse", "HEAD");
+    assert.notEqual(otherHead, launchHead);
+
+    // Default compile (no repo_path) still locks the launch root HEAD and records no repo_root
+    const defaultRes = await client.callTool(compileArgs("repo-path-default"));
+    const defaultContract = JSON.parse(defaultRes.content[0].text).contract;
+    assert.equal(defaultContract.base_sha, launchHead);
+    assert.equal(defaultContract.repo_root, undefined);
+
+    // repo_path locks the other repo's HEAD; the contract stays in the launch root's .governor store
+    const otherRes = await client.callTool(compileArgs("repo-path-other", { repo_path: otherRepo }));
+    const otherContract = JSON.parse(otherRes.content[0].text).contract;
+    assert.equal(otherContract.base_sha, otherHead);
+    assert.equal(otherContract.repo_root, await fs.realpath(otherRepo));
+    assert.equal(existsSync(contractFile("repo-path-other")), true);
+    assert.equal(existsSync(path.join(otherRepo, ".governor")), false);
+
+    // Re-compiling the same contract against a different repo is refused
+    const relockRes = await client.callTool(compileArgs("repo-path-other", { repo_path: tmpRepo }));
+    assert.equal(relockRes.isError, true);
+    assert.match(relockRes.content[0].text, /CONTRACT REPO LOCK/);
+
+    // Subdirectory, missing path, and empty string are rejected without creating a contract
+    for (const [idx, badPath] of [path.join(otherRepo, "sub"), path.join(tmpHarness, "missing-repo"), ""].entries()) {
+      const id = `repo-path-bad-${idx}`;
+      const badRes = await client.callTool(compileArgs(id, { repo_path: badPath }));
+      assert.equal(badRes.isError, true, `Expected repo_path '${badPath}' to be rejected`);
+      assert.match(badRes.content[0].text, /Invalid repo_path/);
+      assert.equal(existsSync(contractFile(id)), false);
+    }
+
+    // Verify against a linked worktree (.git is a file, as in a submodule) reviews only that repo's diff
+    const worktree = path.join(tmpHarness, "other-worktree");
+    git(otherRepo, "worktree", "add", "-b", "wt", worktree);
+    const wtRes = await client.callTool(compileArgs("repo-path-worktree", { repo_path: worktree }));
+    assert.equal(JSON.parse(wtRes.content[0].text).contract.base_sha, otherHead);
+
+    await fs.writeFile(path.join(worktree, "other.ts"), "export const other = 'changed-in-worktree';\n", "utf8");
+    await fs.writeFile(path.join(worktree, "worktree-untracked.ts"), "export const fresh = true;\n", "utf8");
+    await fs.writeFile(judgeModeFile, "PASS", "utf8");
+    const verifyRes = await client.callTool({
+      name: "verify_adversarial_diff",
+      arguments: { contract_id: "repo-path-worktree", primary_agent_family: "claude" }
+    });
+    assert.match(verifyRes.content[0].text, /VERDICT: PASS/);
+
+    const capturedStdin = await fs.readFile(judgeCaptureFile, "utf8");
+    assert.match(capturedStdin, /changed-in-worktree/);
+    assert.match(capturedStdin, /worktree-untracked\.ts/);
+    assert.doesNotMatch(capturedStdin, /app\.ts/);
+    assert.doesNotMatch(capturedStdin, /sub\/keep\.ts/);
+    assert.match(git(worktree, "status", "--porcelain", "worktree-untracked.ts"), /^\?\? worktree-untracked\.ts/);
+  });
 });
 
 describe("judge failover falls through to reasonix", { skip: process.platform === "win32" }, () => {

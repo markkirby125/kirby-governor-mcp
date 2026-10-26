@@ -26,6 +26,7 @@ export declare const ContractRecordSchema: z.ZodObject<{
     contract_id: z.ZodString;
     created_at: z.ZodString;
     base_sha: z.ZodString;
+    repo_root: z.ZodOptional<z.ZodString>;
     task_type: z.ZodEnum<{
         outcome_driven: "outcome_driven";
         creative_exploratory: "creative_exploratory";
@@ -82,6 +83,10 @@ export declare function runCommandSafe(command: string, args: string[], options?
  * Ensures requested file paths stay strictly inside REPO_ROOT (including null-byte and ancestor symlink resolution).
  */
 export declare function resolveSafeRepoPath(relativePath: string): string;
+/**
+ * Resolves a compile-time repo_path to the realpath of a git top-level directory (subdirectories of a repo are rejected).
+ */
+export declare function resolveGitTopLevel(repoPath: string): Promise<string>;
 /**
  * Deduplicates repetitive stack trace frames while preserving the leading exception header line.
  */

@@ -3,7 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
@@ -184,6 +184,8 @@ export const ContractRecordSchema = z.object({
   contract_id: z.string().regex(/^[a-zA-Z0-9_-]{3,64}$/),
   created_at: z.string().max(128),
   base_sha: z.string().min(4).max(128),
+  // Absent on default-root and pre-repo_path contracts; git and diff capture then use REPO_ROOT
+  repo_root: z.string().min(1).max(4_096).optional(),
   task_type: z.enum(["outcome_driven", "creative_exploratory"]),
   raw_task: z.string().min(5).max(10_000),
   altitude: z.object({
@@ -412,6 +414,30 @@ export function resolveSafeRepoPath(relativePath: string): string {
     return realTarget;
   }
   return resolved;
+}
+
+/**
+ * Resolves a compile-time repo_path to the realpath of a git top-level directory (subdirectories of a repo are rejected).
+ */
+export async function resolveGitTopLevel(repoPath: string): Promise<string> {
+  if (!repoPath.trim() || repoPath.includes("\0")) {
+    throw new Error("repo_path must be a non-empty path without null bytes.");
+  }
+  let real: string;
+  try {
+    real = realpathSync(path.resolve(REPO_ROOT, repoPath));
+  } catch {
+    throw new Error(`repo_path does not exist: ${repoPath}`);
+  }
+  if (!statSync(real).isDirectory()) {
+    throw new Error(`repo_path is not a directory: ${repoPath}`);
+  }
+  const res = await runCommandSafe("git", ["rev-parse", "--show-toplevel"], { cwd: real, timeoutMs: 5_000 });
+  const topLevel = res.exitCode === 0 ? res.stdout.trim() : "";
+  if (!topLevel || realpathSync(topLevel) !== real) {
+    throw new Error(`repo_path is not the top-level directory of a git repository: ${repoPath}`);
+  }
+  return real;
 }
 
 /**
@@ -810,7 +836,8 @@ export class KirbyGovernorServer {
    * inside an isolated 0o700 mkdtemp directory so the user's real .git/index is NEVER mutated or locked.
    */
   private async extractCleanDiff(
-    baseSha: string
+    baseSha: string,
+    repoRoot: string = REPO_ROOT
   ): Promise<{ diff: string; treeHash: string; truncated: boolean; redactedCount: number }> {
     let releaseMutex!: () => void;
     const prevMutex = this.indexMutex;
@@ -823,7 +850,12 @@ export class KirbyGovernorServer {
     try {
       tempIndexDir = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-gov-idx-"));
       const tempIndexPath = path.join(tempIndexDir, "index");
-      const realGitIndex = path.join(REPO_ROOT, ".git", "index");
+      // --git-path resolves the index when .git is a file (submodules, linked worktrees)
+      const indexPathRes = await runCommandSafe("git", ["rev-parse", "--git-path", "index"], { cwd: repoRoot, timeoutMs: 5_000 });
+      if (indexPathRes.exitCode !== 0) {
+        throw new Error(`git rev-parse --git-path index failed (exit ${indexPathRes.exitCode}): ${indexPathRes.stderr.slice(0, 500)}`);
+      }
+      const realGitIndex = path.resolve(repoRoot, indexPathRes.stdout.trim());
       if (existsSync(realGitIndex)) {
         await fs.copyFile(realGitIndex, tempIndexPath);
       }
@@ -835,6 +867,7 @@ export class KirbyGovernorServer {
           : process.env.KIRBY_GOVERNOR_REDACT_SECRETS !== "0";
 
       const untrackedRes = await runCommandSafe("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+        cwd: repoRoot,
         timeoutMs: 10_000,
         extraEnv: indexEnv
       });
@@ -858,6 +891,7 @@ export class KirbyGovernorServer {
 
       if (untrackedFiles.length > 0) {
         await runCommandSafe("git", ["add", "-N", "--", ...untrackedFiles], {
+          cwd: repoRoot,
           timeoutMs: 10_000,
           extraEnv: indexEnv
         });
@@ -888,6 +922,7 @@ export class KirbyGovernorServer {
       ];
 
       const res = await runCommandSafe("git", diffArgs, {
+        cwd: repoRoot,
         timeoutMs: 15_000,
         extraEnv: indexEnv
       });
@@ -938,9 +973,27 @@ export class KirbyGovernorServer {
         }),
         empirical_gate: z.object({
           proof_command: z.string().min(2).max(1_000).describe("(4) Exact CLI test command (e.g. 'npm test') that proves completion [06:26]")
-        })
+        }),
+        repo_path: z
+          .string()
+          .max(4_096)
+          .optional()
+          .describe("Optional git top-level directory (e.g. a submodule) to lock base_sha against and verify; defaults to the server's repo root")
       },
       async (input) => {
+        let requestedRepoRoot: string | undefined;
+        if (input.repo_path !== undefined) {
+          try {
+            requestedRepoRoot = await resolveGitTopLevel(input.repo_path);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return {
+              isError: true,
+              content: [{ type: "text", text: `Invalid repo_path: ${msg}` }]
+            };
+          }
+        }
+
         const lockToken = await this.acquireContractLock(input.contract_id);
         if (!lockToken) {
           return {
@@ -979,7 +1032,24 @@ export class KirbyGovernorServer {
             };
           }
 
-          const headRes = await runCommandSafe("git", ["rev-parse", "--verify", "HEAD"], { timeoutMs: 5_000 });
+          // A re-compile keeps the existing base_sha, so it must also keep that contract's repo
+          if (existing && requestedRepoRoot !== undefined && requestedRepoRoot !== (existing.repo_root ?? REPO_ROOT)) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `CONTRACT REPO LOCK: Contract '${input.contract_id}' is locked to '${existing.repo_root ?? REPO_ROOT}'. Compile under a new contract_id to target '${requestedRepoRoot}'.`
+                }
+              ]
+            };
+          }
+          const recordedRepoRoot = existing ? existing.repo_root : requestedRepoRoot;
+
+          const headRes = await runCommandSafe("git", ["rev-parse", "--verify", "HEAD"], {
+            cwd: recordedRepoRoot ?? REPO_ROOT,
+            timeoutMs: 5_000
+          });
           if (headRes.exitCode !== 0 && !existing?.base_sha) {
             return {
               isError: true,
@@ -997,6 +1067,7 @@ export class KirbyGovernorServer {
             contract_id: input.contract_id,
             created_at: existing?.created_at || new Date().toISOString(),
             base_sha: baseSha,
+            repo_root: recordedRepoRoot,
             task_type: input.task_type,
             raw_task: input.raw_task,
             altitude: input.altitude,
@@ -1191,7 +1262,8 @@ export class KirbyGovernorServer {
             };
           }
 
-          const proofRes = await runCommandSafe(proofCmd, proofArgs, { timeoutMs: 90_000 });
+          const repoRoot = contract.repo_root ?? REPO_ROOT;
+          const proofRes = await runCommandSafe(proofCmd, proofArgs, { cwd: repoRoot, timeoutMs: 90_000 });
           if (proofRes.exitCode !== 0) {
             contract.pregate_failure_count = (contract.pregate_failure_count ?? 0) + 1;
             if (contract.pregate_failure_count >= MAX_PREGATE_FAILURES) {
@@ -1221,7 +1293,7 @@ export class KirbyGovernorServer {
           }
 
           // Stage B: Extract Clean & Redacted Diff against locked base_sha
-          const { diff, treeHash, truncated, redactedCount } = await this.extractCleanDiff(contract.base_sha);
+          const { diff, treeHash, truncated, redactedCount } = await this.extractCleanDiff(contract.base_sha, repoRoot);
           if (!diff.trim()) {
             return {
               content: [{ type: "text", text: "VERDICT: REJECT. Git diff against base_sha is empty." }]
@@ -1420,7 +1492,7 @@ export class KirbyGovernorServer {
             };
           }
 
-          const { diff } = await this.extractCleanDiff(contract.base_sha);
+          const { diff } = await this.extractCleanDiff(contract.base_sha, contract.repo_root ?? REPO_ROOT);
           const judgeChain = await this.selectOutsideJudgeChain(primary_agent_family);
 
           const findingsReport: string[] = [
