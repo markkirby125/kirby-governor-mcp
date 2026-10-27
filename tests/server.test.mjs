@@ -855,6 +855,21 @@ describe("judge failover falls through to reasonix", { skip: process.platform ==
       for (const name of await leftoverPayloads()) await fs.rm(path.join(judgeDir, name), { force: true });
     }
   });
+
+  test("18. judge failover skips zcode for a payload above the 120 KB cap without running it, and records the skip", async () => {
+    // zcode-hang would take the full 5 s timeout if it ran; the skip must keep it from running at all.
+    process.env.PATH = [zcodeHangDir, reasonixDir, "/usr/bin", "/bin"].join(path.delimiter);
+    const server = new KirbyGovernorServer();
+    const chain = await server.selectOutsideJudgeChain("claude");
+    for (const judge of chain) judge.timeoutMs = 5_000;
+    const payload = "PAYLOAD-LARGE " + "x".repeat(120_001);
+    const started = Date.now();
+    const result = await server.runJudgeChain(chain, payload, 5_000);
+    assert.equal(result.judge?.name, "reasonix-cli");
+    assert.match(result.skipped[0], /zcode-cli skipped: payload \d+ bytes exceeds 120000/);
+    assert.deepEqual(result.attempts, []);
+    assert.ok(Date.now() - started < 4_000, "zcode must not run for an oversized payload");
+  });
 });
 
 describe("judge run classification", () => {
