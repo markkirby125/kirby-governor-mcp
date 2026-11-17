@@ -24,7 +24,7 @@ Copy and paste this into any AI coding app (Cursor, Windsurf, Claude Code, Grok,
 
 `verify_adversarial_diff` sends unverified diffs to an outside judge CLI from a different model family than the primary agent. Candidates run in this order:
 
-1. **`zcode`** (`zcode-cli`): the diff is written to a payload file under `.governor/judge/` and passed with `--attach`, because `zcode -p` ignores stdin. It runs as `zcode -p <judge prompt> --mode build --attach <file>`. The file is deleted after the call.
+1. **`zcode`** (`zcode-cli`): the diff is written to a payload file under `.governor/judge/` and passed with `--attach`, because `zcode -p` ignores stdin. It runs as `zcode -p <judge prompt> --mode build --attach <file>`. The file is deleted after the call. The call passes no `--model` flag, so the judge runs on zCode's saved default model. To run it on the flash model, set `config.defaultModelSelection.modelId` to `GLM-5.3-Flash` in `~/.zcode/v2/provider_config.json`. Check the result in the newest `~/.zcode/cli/rollout/model-io-*.jsonl`.
 2. **`reasonix`** (`reasonix-cli`): runs as `reasonix -p --model deepseek-flash --output-format text`, with the diff on stdin.
 3. **`codex`** (`codex-cli`): runs as `codex exec -`, with the diff on stdin.
 4. **`claude`** (`claude-cli`): runs as `claude -p -`, with the diff on stdin.
