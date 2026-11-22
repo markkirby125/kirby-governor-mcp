@@ -42,9 +42,10 @@ const MAX_ACCUMULATED_CONTEXT_CHARS = 60_000;
 const MAX_REVIEW_CYCLES = 3;
 const MAX_PREGATE_FAILURES = 6;
 const MAX_STORED_CONTRACTS = 50;
-// 20 minutes: longer than the slowest judge chain (proof ~60 s + zcode 305 s + reasonix 305 s + codex 125 s + claude 125 s),
-// so a lock cannot go stale while the call that holds it is still running.
-const LOCK_STALE_MS = 20 * 60 * 1000;
+// A live call refreshes its lock every LOCK_HEARTBEAT_MS, so a lock older than LOCK_STALE_MS belongs to a dead process.
+// That holds however long the proof or the judge chain runs (the chain alone can take ~15 minutes).
+const LOCK_STALE_MS = Number(process.env.KIRBY_GOVERNOR_LOCK_STALE_MS) || 2 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = Number(process.env.KIRBY_GOVERNOR_LOCK_HEARTBEAT_MS) || 20 * 1000;
 const TMP_ORPHAN_MAX_AGE_MS = 60 * 60 * 1000;
 /** Exit code runCommandSafe reports for a process killed on timeout (same convention as timeout(1)). */
 const TIMEOUT_EXIT_CODE = 124;
@@ -643,6 +644,7 @@ const ZCODE_MAX_PAYLOAD_BYTES = 120_000;
 export class KirbyGovernorServer {
   private server: McpServer;
   private activeLocks = new Map<string, string>();
+  private lockHeartbeats = new Map<string, NodeJS.Timeout>();
   private indexMutex: Promise<void> = Promise.resolve();
 
   constructor() {
@@ -680,6 +682,12 @@ export class KirbyGovernorServer {
         await fh.close();
       }
       this.activeLocks.set(contractId, lockToken);
+      const beat = setInterval(() => {
+        const now = new Date();
+        void fs.utimes(lockPath, now, now).catch(() => {});
+      }, LOCK_HEARTBEAT_MS);
+      beat.unref();
+      this.lockHeartbeats.set(contractId, beat);
       return lockToken;
     } catch {
       if (created) {
@@ -692,6 +700,8 @@ export class KirbyGovernorServer {
   private async releaseContractLock(contractId: string, lockToken: string): Promise<void> {
     if (this.activeLocks.get(contractId) === lockToken) {
       this.activeLocks.delete(contractId);
+      clearInterval(this.lockHeartbeats.get(contractId));
+      this.lockHeartbeats.delete(contractId);
     }
     const lockPath = path.join(GOVERNOR_DIR, `${contractId}.lock`);
     try {
@@ -1470,7 +1480,7 @@ export class KirbyGovernorServer {
               skipped,
               attempts
             });
-            // The contract lock outlasts the longest chain (LOCK_STALE_MS), so this in-memory copy cannot be stale.
+            // The lock is refreshed while this call runs (LOCK_HEARTBEAT_MS), so no retry can take it and this in-memory copy cannot be stale.
             pushHistory(contract, unavailable);
             let saveNote = "";
             await this.saveContractAtomically(contract).catch((err: unknown) => {

@@ -1097,3 +1097,73 @@ describe("judge failover through the verify handler", { skip: process.platform =
     assert.match(entry.judge_attempts, /reasonix-cli exited 1 with empty output.*no tools allowed/s);
   });
 });
+
+describe("contract lock while a verify call is running", { skip: process.platform === "win32" }, () => {
+  let repo;
+  let stubDir;
+  let client;
+
+  before(async () => {
+    repo = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-gov-lock-"));
+    stubDir = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-gov-lock-stubs-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    await fs.writeFile(path.join(repo, "app.ts"), "export const v = 1;\n", "utf8");
+    execFileSync("git", ["add", "app.ts"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "base"], { cwd: repo });
+    // A judge slower than the stale limit below: without a heartbeat the lock would look dead mid-call.
+    await fs.writeFile(path.join(stubDir, "reasonix"), "#!/bin/sh\ncat >/dev/null\nsleep 1.6\necho 'VERDICT: PASS'\n", { mode: 0o755 });
+    const transport = new StdioClientTransport({
+      command: "node",
+      args: [SERVER_DIST],
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        KIRBY_GOVERNOR_REPO_ROOT: repo,
+        KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE: "0",
+        KIRBY_GOVERNOR_JUDGE_CMD: "",
+        KIRBY_GOVERNOR_LOCK_STALE_MS: "600",
+        KIRBY_GOVERNOR_LOCK_HEARTBEAT_MS: "100"
+      }
+    });
+    client = new Client({ name: "lock-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+  });
+
+  after(async () => {
+    if (client) await client.close();
+    if (repo) await fs.rm(repo, { recursive: true, force: true });
+    if (stubDir) await fs.rm(stubDir, { recursive: true, force: true });
+  });
+
+  test("a running call keeps its lock fresh, so a slow proof cannot let a retry take it over", async () => {
+    await client.callTool({
+      name: "compile_execution_contract",
+      arguments: {
+        contract_id: "lock-v1",
+        task_type: "outcome_driven",
+        raw_task: "Lock heartbeat test",
+        altitude: { ultimate_outcome: "A live call never looks stale", decisions_enabled: ["Whether a retry may take the lock"] },
+        depth: {
+          unasked_expert_actions: ["Sample the lock file mid-call", "Compare its age to the stale limit"],
+          raw_data_sources: ["app.ts"],
+          expert_methods_and_tools: ["stub judge", "node test runner"],
+          unreasonable_target: "The lock is never older than the stale limit while held"
+        },
+        empirical_gate: { proof_command: "node -v" }
+      }
+    });
+    await fs.writeFile(path.join(repo, "app.ts"), "export const v = 2;\n", "utf8");
+
+    const lockPath = path.join(repo, ".governor", "contracts", "lock-v1.lock");
+    const running = client.callTool({ name: "verify_adversarial_diff", arguments: { contract_id: "lock-v1", primary_agent_family: "claude" } });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const age = Date.now() - (await fs.stat(lockPath)).mtimeMs;
+    assert.ok(age < 600, `the lock is ${age} ms old mid-call, past the 600 ms stale limit`);
+
+    const res = await running;
+    assert.match(res.content[0].text, /VERDICT: PASS/);
+    assert.equal(existsSync(lockPath), false, "the lock is released when the call ends");
+  });
+});

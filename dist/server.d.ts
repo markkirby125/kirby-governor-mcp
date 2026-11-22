@@ -138,6 +138,7 @@ export declare function classifyJudgeResult(judge: JudgeCandidate, res: ExecResu
 export declare class KirbyGovernorServer {
     private server;
     private activeLocks;
+    private lockHeartbeats;
     private indexMutex;
     constructor();
     private acquireContractLock;
