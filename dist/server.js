@@ -223,10 +223,17 @@ export const ContractRecordSchema = z.object({
         timestamp: z.string().max(128),
         judge_cli: z.string().max(128),
         judge_skipped: z.string().max(1_000).optional(),
+        judge_attempts: z.string().max(2_000).optional(),
         verdict: z.string().max(64)
     }))
         .max(100)
 });
+/** Appends a history entry and drops the oldest past the schema's 100-entry cap, so a saved contract always reloads. */
+function pushHistory(contract, entry) {
+    contract.history.push(entry);
+    while (contract.history.length > 100)
+        contract.history.shift();
+}
 /**
  * Resolves Windows .cmd shims when running on win32 without a shell.
  */
@@ -1276,6 +1283,18 @@ export class KirbyGovernorServer {
                 ].join("\n");
                 const { judge, res: judgeRes, attempts, skipped } = await this.runJudgeChain(judgeChain, reviewPayload, 120_000);
                 if (!judge || !judgeRes) {
+                    // Persist why every judge failed: the response is lost when the client times out first.
+                    pushHistory(contract, {
+                        cycle: contract.review_cycle_count,
+                        timestamp: new Date().toISOString(),
+                        judge_cli: "none",
+                        judge_skipped: skipped.length > 0 ? skipped.join(" | ").slice(0, 1_000) : undefined,
+                        judge_attempts: attempts.join(" | ").slice(0, 2_000),
+                        verdict: "JUDGE_UNAVAILABLE"
+                    });
+                    await this.saveContractAtomically(contract).catch((err) => {
+                        console.error(`[kirby-governor] Could not save JUDGE_UNAVAILABLE history: ${err instanceof Error ? err.message : String(err)}`);
+                    });
                     return {
                         isError: true,
                         content: [
@@ -1304,11 +1323,12 @@ export class KirbyGovernorServer {
                         contract.status = "ESCALATED";
                     }
                 }
-                contract.history.push({
+                pushHistory(contract, {
                     cycle: contract.review_cycle_count,
                     timestamp: new Date().toISOString(),
                     judge_cli: judge.name,
                     judge_skipped: skipped.length > 0 ? skipped.join(" | ") : undefined,
+                    judge_attempts: attempts.length > 0 ? attempts.join(" | ").slice(0, 2_000) : undefined,
                     verdict: passed ? "PASS" : "REJECT"
                 });
                 await this.saveContractAtomically(contract);

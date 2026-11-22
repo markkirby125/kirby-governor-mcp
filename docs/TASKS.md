@@ -11,6 +11,10 @@ Each task is one `###` entry with these fields, in this order:
 
 ## Open
 
+### 2026-11-22-judge-attempts-in-contract Save judge attempts to the contract
+
+Status: in progress. When every judge fails, `verify_adversarial_diff` returns JUDGE_UNAVAILABLE and saves nothing, and a client timeout drops the failure reasons of judges that failed before the one that answered. Record them in the contract history (`judge_attempts`, plus a JUDGE_UNAVAILABLE entry) so they survive a lost response. Branch `feat/judge-attempts-in-contract`. Seen 2026-11-22: two gate runs hit the 600 s client timeout and the reasons were lost.
+
 <!-- Add new entries above this line. Move finished entries to Done. -->
 
 ## Done

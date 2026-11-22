@@ -398,6 +398,14 @@ if (mode === "EMPTY_STDOUT") {
     });
     assert.equal(emptyJudgeRes.isError, true);
     assert.match(emptyJudgeRes.content[0].text, /JUDGE_UNAVAILABLE/);
+
+    // The reason must also be saved: a client timeout drops the response, the contract keeps it.
+    const savedRaw = await fs.readFile(path.join(tmpRepo, ".governor", "contracts", "hiring-fast-v1.json"), "utf8");
+    const saved = JSON.parse(savedRaw);
+    const lastEntry = saved.history.at(-1);
+    assert.equal(lastEntry.verdict, "JUDGE_UNAVAILABLE");
+    assert.match(lastEntry.judge_attempts, /empty output/);
+    assert.equal(lastEntry.cycle, saved.review_cycle_count, "an unavailable judge must not burn a cycle");
   });
 
   test("8. verify_adversarial_diff enforces 3-strike circuit breaker, blocks overwrite bypass, & rejects corrupt/missing contracts", async () => {
