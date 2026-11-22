@@ -13,7 +13,7 @@ Each task is one `###` entry with these fields, in this order:
 
 ### 2026-11-22-judge-attempts-in-contract Save judge attempts to the contract
 
-Status: in progress. When every judge fails, `verify_adversarial_diff` returns JUDGE_UNAVAILABLE and saves nothing, and a client timeout drops the failure reasons of judges that failed before the one that answered. Record them in the contract history (`judge_attempts`, plus a JUDGE_UNAVAILABLE entry) so they survive a lost response. Branch `feat/judge-attempts-in-contract`. Seen 2026-11-22: two gate runs hit the 600 s client timeout and the reasons were lost.
+Status: in progress. Built and tested (29 of 29): commits 19c84e2, 73f5cfc, 43f490e on branch `feat/judge-attempts-in-contract`, unpushed. The governor now saves judge attempts and a JUDGE_UNAVAILABLE entry to the contract history, tells judges to use no tools (rule 6, because agentic judges tried to read files and timed out), caps each reason fairly, and reloads the contract before the failure save. Its own gate (contract `gov-judge-attempts`) is at cycle 1 of 3: REJECT from claude-cli (same family), three of four findings fixed; the fourth (save after every attempt, so a killed server still keeps the reasons) was left out on purpose. Cycle 2 not run. Open: run cycle 2; decide whether to push; reasonix still times out at 120 s on real payloads (raise its timeout); codex fails on the model set in the user's Codex config.
 
 <!-- Add new entries above this line. Move finished entries to Done. -->
 
