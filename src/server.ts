@@ -255,7 +255,17 @@ export function judgeHistoryEntry(e: {
   skipped: string[];
   attempts: string[];
 }): ContractRecord["history"][number] {
-  const joined = (list: string[], max: number) => (list.length > 0 ? list.join(" | ").slice(0, max) : undefined);
+  const joined = (list: string[], max: number) => {
+    if (list.length === 0) return undefined;
+    const text = list.join(" | ");
+    if (text.length <= max) return text;
+    // Over the cap: each reason gets an equal share, marked with an ellipsis, so the last judges' reasons survive too.
+    const share = Math.max(8, Math.floor((max - 3 * (list.length - 1)) / list.length));
+    return list
+      .map((s) => (s.length > share ? `${s.slice(0, share - 1)}…` : s))
+      .join(" | ")
+      .slice(0, max);
+  };
   return {
     cycle: e.cycle,
     timestamp: new Date().toISOString(),
@@ -1437,12 +1447,18 @@ export class KirbyGovernorServer {
           const { judge, res: judgeRes, attempts, skipped } = await this.runJudgeChain(judgeChain, reviewPayload, 120_000);
           if (!judge || !judgeRes) {
             // Persist why every judge failed: the response is lost when the client times out first.
-            pushHistory(
-              contract,
-              judgeHistoryEntry({ cycle: contract.review_cycle_count, judge_cli: "none", verdict: "JUDGE_UNAVAILABLE", skipped, attempts })
-            );
+            const unavailable = judgeHistoryEntry({
+              cycle: contract.review_cycle_count,
+              judge_cli: "none",
+              verdict: "JUDGE_UNAVAILABLE",
+              skipped,
+              attempts
+            });
+            // Reload before saving: after a long chain another call may have changed the contract (lock evicted as stale).
+            const fresh = await this.loadContract(contract_id).catch(() => contract);
+            pushHistory(fresh, unavailable);
             let saveNote = "";
-            await this.saveContractAtomically(contract).catch((err: unknown) => {
+            await this.saveContractAtomically(fresh).catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
               console.error(`[kirby-governor] Could not save JUDGE_UNAVAILABLE history: ${msg}`);
               saveNote = ` | NOT SAVED to the contract: ${msg}`;
