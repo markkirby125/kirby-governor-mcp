@@ -38,7 +38,7 @@ Must be called **before** mutating application files. The agent inspects the rep
 Connects the agent to empirical ground truth across three modes:
 * `crash_and_logs`: Reads repository logs (strictly contained within `REPO_ROOT` via `realpathSync` symlink validation) and deduplicates repetitive stack frames.
 * `version_commit_map`: Maps recent commits, branches, and release tags (`git log --graph --oneline --decorate`) to correlate regressions with code changes.
-* `reproduce_and_test`: Executes an allowlisted test runner (`npm_test`, `vitest`, `pytest`, `go_test`, `cargo_test`) to reproduce crashes and verify fixes empirically.
+* `reproduce_and_test`: Executes an allowlisted test runner (`npm_test`, `vitest`, `pytest`, `go_test`, `cargo_test`) to reproduce crashes and verify fixes empirically. For `verify_adversarial_diff`, a Python project may also name its own virtualenv as the proof binary: exactly `.venv/bin/python`, `.venv/bin/python3` or `.venv/bin/pytest`, resolved under the repo root and only if the file exists. Any other path stays rejected, and the inline-eval flag blocklist still applies.
 
 ### Tool 3: `verify_adversarial_diff` (Deterministic Pre-Gate + Cross-Model Outside Judge)
 Enforces decoupled verification before task completion:

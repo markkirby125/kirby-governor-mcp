@@ -592,6 +592,60 @@ if (mode === "EMPTY_STDOUT") {
     assert.match(legitRes.content[0].text, /DETERMINISTIC PRE-GATE FAILED/);
   });
 
+  test("9b. verify_adversarial_diff runs the repo's own .venv interpreter and still rejects every other path", async () => {
+    const marker = path.join(tmpHarness, ".venv_python_ran");
+    const venvBin = path.join(tmpRepo, ".venv", "bin");
+    await fs.mkdir(venvBin, { recursive: true });
+    await fs.writeFile(path.join(venvBin, "python"), `#!/bin/sh\necho ran > "${marker}"\nexit 0\n`, { mode: 0o755 });
+    await fs.writeFile(judgeModeFile, "PASS", "utf8");
+
+    const verifyWith = async (cid, proofCommand) => {
+      await client.callTool({
+        name: "compile_execution_contract",
+        arguments: {
+          contract_id: cid,
+          task_type: "outcome_driven",
+          raw_task: "venv proof_command allowlist",
+          altitude: {
+            ultimate_outcome: "Run a Python project's tests with its own virtualenv interpreter",
+            decisions_enabled: ["Allow exactly .venv/bin/python, .venv/bin/python3 and .venv/bin/pytest under the repo root"]
+          },
+          depth: {
+            unasked_expert_actions: ["Match relative names exactly", "Keep the inline-eval flag blocklist in force"],
+            raw_data_sources: ["src/server.ts"],
+            expert_methods_and_tools: ["Zero-shell spawn", "Integration test"],
+            unreasonable_target: "No arbitrary path ever reaches spawn"
+          },
+          empirical_gate: { proof_command: proofCommand }
+        }
+      });
+      return client.callTool({
+        name: "verify_adversarial_diff",
+        arguments: { contract_id: cid, primary_agent_family: "claude" }
+      });
+    };
+
+    try {
+      const ok = await verifyWith("venv-python-ok", ".venv/bin/python -m pytest tests -q");
+      assert.doesNotMatch(ok.content[0].text, /not in the allowlist/);
+      assert.ok(existsSync(marker), "the repo's .venv/bin/python should have been executed");
+
+      for (const [idx, bad] of [
+        ".venv/bin/sh -c true",
+        "./.venv/bin/python -m pytest",
+        "../.venv/bin/python -m pytest",
+        "/usr/bin/python3 -m pytest",
+        ".venv/bin/pytest -q" // allowed name, but no such file in this repo
+      ].entries()) {
+        const res = await verifyWith(`venv-bad-${idx}`, bad);
+        assert.equal(res.isError, true, `Expected '${bad}' to be rejected`);
+        assert.match(res.content[0].text, /not in the allowlist/, `'${bad}' must stay rejected`);
+      }
+    } finally {
+      await fs.rm(path.join(tmpRepo, ".venv"), { recursive: true, force: true });
+    }
+  });
+
   test("10. orchestrate_range_crew runs sequential specialist passes with noun-to-verb reframing", async () => {
     await fs.writeFile(judgeModeFile, "PASS", "utf8");
     const rangeRes = await client.callTool({

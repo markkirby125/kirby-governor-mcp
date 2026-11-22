@@ -10,6 +10,12 @@ export type AgentFamily = (typeof AGENT_FAMILIES)[number];
  */
 export declare function findBlockedProofArg(proofArgs: string[]): string | undefined;
 /**
+ * Returns what to spawn for a proof_command binary, or undefined if it is not allowed.
+ * Bare runner names pass through. The three repo-local venv names resolve to an absolute path under
+ * repoRoot, and only if that file exists.
+ */
+export declare function resolveProofBinary(proofCmd: string | undefined, repoRoot: string): string | undefined;
+/**
  * Redacts high-entropy credentials, tokens, and private keys before diffs or contracts are persisted/dispatched.
  * Reversible switches:
  * - KIRBY_GOVERNOR_REDACT_SECRETS=0 disables inline regex redaction (and file exclusion unless KIRBY_GOVERNOR_EXCLUDE_SECRET_FILES=1).

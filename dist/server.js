@@ -73,6 +73,26 @@ export function findBlockedProofArg(proofArgs) {
         return BLOCKED_PROOF_FLAGS.has(arg.toLowerCase()) || BLOCKED_PROOF_FLAGS.has(flagPart);
     });
 }
+const ALLOWED_PROOF_BINARIES = new Set(["npm", "pnpm", "yarn", "bun", "node", "pytest", "python3", "go", "cargo"]);
+// A Python project's tests need its own virtualenv. Exact relative names only, resolved under the repo root,
+// so no other path can reach spawn. The venv interpreter is usually a symlink to a base install outside the
+// repo, so its real path is deliberately not required to stay inside the repo.
+const REPO_VENV_PROOF_BINARIES = new Set([".venv/bin/python", ".venv/bin/python3", ".venv/bin/pytest"]);
+/**
+ * Returns what to spawn for a proof_command binary, or undefined if it is not allowed.
+ * Bare runner names pass through. The three repo-local venv names resolve to an absolute path under
+ * repoRoot, and only if that file exists.
+ */
+export function resolveProofBinary(proofCmd, repoRoot) {
+    if (!proofCmd)
+        return undefined;
+    if (ALLOWED_PROOF_BINARIES.has(proofCmd))
+        return proofCmd;
+    if (!REPO_VENV_PROOF_BINARIES.has(proofCmd))
+        return undefined;
+    const candidate = path.join(repoRoot, proofCmd);
+    return existsSync(candidate) ? candidate : undefined;
+}
 const SECRET_REDACTION_PATTERNS = [
     {
         name: "PEM_PRIVATE_KEY",
@@ -1132,8 +1152,9 @@ export class KirbyGovernorServer {
                 // Stage A: Deterministic Pre-Gate (Zero LLM Tokens if tests fail)
                 const proofParts = tokenizeCommand(contract.empirical_gate.proof_command.trim());
                 const [proofCmd, ...proofArgs] = proofParts;
-                const allowedProofBinaries = new Set(["npm", "pnpm", "yarn", "bun", "node", "pytest", "python3", "go", "cargo"]);
-                if (!proofCmd || !allowedProofBinaries.has(proofCmd)) {
+                const repoRoot = contract.repo_root ?? REPO_ROOT;
+                const proofBinary = resolveProofBinary(proofCmd, repoRoot);
+                if (!proofBinary) {
                     return {
                         isError: true,
                         content: [{ type: "text", text: `Security Gate: proof_command binary '${proofCmd ?? ""}' is not in the allowlist.` }]
@@ -1151,8 +1172,7 @@ export class KirbyGovernorServer {
                         ]
                     };
                 }
-                const repoRoot = contract.repo_root ?? REPO_ROOT;
-                const proofRes = await runCommandSafe(proofCmd, proofArgs, { cwd: repoRoot, timeoutMs: 90_000 });
+                const proofRes = await runCommandSafe(proofBinary, proofArgs, { cwd: repoRoot, timeoutMs: 90_000 });
                 if (proofRes.exitCode !== 0) {
                     contract.pregate_failure_count = (contract.pregate_failure_count ?? 0) + 1;
                     if (contract.pregate_failure_count >= MAX_PREGATE_FAILURES) {
