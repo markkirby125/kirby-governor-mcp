@@ -388,6 +388,8 @@ if (mode === "EMPTY_STDOUT") {
     await fs.writeFile(path.join(tmpRepo, "app.ts"), "export const v = 5;\n", "utf8");
 
     // 7b. Judge exiting 0 with empty stdout must return JUDGE_UNAVAILABLE without incrementing cycle
+    const contractFile7b = path.join(tmpRepo, ".governor", "contracts", "hiring-fast-v1.json");
+    const cycleBefore = JSON.parse(await fs.readFile(contractFile7b, "utf8")).review_cycle_count;
     await fs.writeFile(judgeModeFile, "EMPTY_STDOUT", "utf8");
     const emptyJudgeRes = await client.callTool({
       name: "verify_adversarial_diff",
@@ -405,7 +407,7 @@ if (mode === "EMPTY_STDOUT") {
     const lastEntry = saved.history.at(-1);
     assert.equal(lastEntry.verdict, "JUDGE_UNAVAILABLE");
     assert.match(lastEntry.judge_attempts, /empty output/);
-    assert.equal(lastEntry.cycle, saved.review_cycle_count, "an unavailable judge must not burn a cycle");
+    assert.equal(saved.review_cycle_count, cycleBefore, "an unavailable judge must not burn a cycle");
   });
 
   test("8. verify_adversarial_diff enforces 3-strike circuit breaker, blocks overwrite bypass, & rejects corrupt/missing contracts", async () => {
@@ -961,5 +963,48 @@ describe("judge run classification", () => {
   test("whitespace-only stdout counts as empty", () => {
     const outcome = classifyJudgeResult(judge, run({ exitCode: 0, stdout: "  \n" }));
     assert.deepEqual(outcome, { ok: false, reason: "zcode-cli exited 0 with empty output" });
+  });
+});
+
+describe("judge history entries", () => {
+  let judgeHistoryEntry;
+  let pushHistory;
+  let ContractRecordSchema;
+
+  before(async () => {
+    ({ judgeHistoryEntry, pushHistory, ContractRecordSchema } = await import(pathToFileURL(SERVER_DIST).href));
+  });
+
+  test("caps skipped and attempts to the schema limits so the entry stays loadable", () => {
+    const entry = judgeHistoryEntry({ cycle: 1, judge_cli: "reasonix-cli", verdict: "PASS", skipped: ["s".repeat(3000)], attempts: ["a".repeat(3000), "b"] });
+    assert.equal(entry.judge_skipped.length, 1000);
+    assert.equal(entry.judge_attempts.length, 2000);
+    assert.doesNotThrow(() => ContractRecordSchema.shape.history.parse([entry]));
+  });
+
+  test("omits both lists when nothing was skipped or failed", () => {
+    const entry = judgeHistoryEntry({ cycle: 0, judge_cli: "zcode-cli", verdict: "PASS", skipped: [], attempts: [] });
+    assert.equal(entry.judge_skipped, undefined);
+    assert.equal(entry.judge_attempts, undefined);
+  });
+
+  test("keeps the reasons of the judges that failed before the one that answered", () => {
+    const entry = judgeHistoryEntry({
+      cycle: 1,
+      judge_cli: "codex-cli",
+      verdict: "REJECT",
+      skipped: [],
+      attempts: ["zcode-cli timed out (exit 124)", "reasonix-cli exited 1 with empty output"]
+    });
+    assert.equal(entry.judge_attempts, "zcode-cli timed out (exit 124) | reasonix-cli exited 1 with empty output");
+  });
+
+  test("pushHistory drops the oldest entry past 100", () => {
+    const contract = { history: [] };
+    for (let i = 0; i < 105; i++) {
+      pushHistory(contract, judgeHistoryEntry({ cycle: i, judge_cli: "x", verdict: "PASS", skipped: [], attempts: [] }));
+    }
+    assert.equal(contract.history.length, 100);
+    assert.equal(contract.history[0].cycle, 5);
   });
 });
