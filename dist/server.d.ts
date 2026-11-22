@@ -65,6 +65,7 @@ export declare const ContractRecordSchema: z.ZodObject<{
         judge_cli: z.ZodString;
         judge_skipped: z.ZodOptional<z.ZodString>;
         judge_attempts: z.ZodOptional<z.ZodString>;
+        judge_review: z.ZodOptional<z.ZodString>;
         verdict: z.ZodString;
     }, z.core.$strip>>;
 }, z.core.$strip>;
@@ -78,6 +79,7 @@ export declare function judgeHistoryEntry(e: {
     verdict: string;
     skipped: string[];
     attempts: string[];
+    review?: string;
 }): ContractRecord["history"][number];
 export interface ExecResult {
     exitCode: number;

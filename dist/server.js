@@ -226,6 +226,7 @@ export const ContractRecordSchema = z.object({
         judge_cli: z.string().max(128),
         judge_skipped: z.string().max(1_000).optional(),
         judge_attempts: z.string().max(2_000).optional(),
+        judge_review: z.string().max(4_000).optional(),
         verdict: z.string().max(64)
     }))
         .max(100)
@@ -235,6 +236,16 @@ export function pushHistory(contract, entry) {
     contract.history.push(entry);
     while (contract.history.length > 100)
         contract.history.shift();
+}
+/** The judge's own text for the history. Over the cap, keeps the head (the findings) and the tail (the verdict line). */
+function cappedReview(review, max) {
+    const text = review?.trim();
+    if (!text)
+        return undefined;
+    if (text.length <= max)
+        return text;
+    const tail = 900;
+    return `${text.slice(0, max - tail - 1)}…${text.slice(-tail)}`;
 }
 /** Builds a history entry with the skipped and attempt lists capped to the schema limits, so a saved contract always reloads. */
 export function judgeHistoryEntry(e) {
@@ -257,6 +268,7 @@ export function judgeHistoryEntry(e) {
         judge_cli: e.judge_cli,
         judge_skipped: joined(e.skipped, 1_000),
         judge_attempts: joined(e.attempts, 2_000),
+        judge_review: cappedReview(e.review, 4_000),
         verdict: e.verdict
     };
 }
@@ -1357,7 +1369,7 @@ export class KirbyGovernorServer {
                         contract.status = "ESCALATED";
                     }
                 }
-                pushHistory(contract, judgeHistoryEntry({ cycle: contract.review_cycle_count, judge_cli: judge.name, verdict: passed ? "PASS" : "REJECT", skipped, attempts }));
+                pushHistory(contract, judgeHistoryEntry({ cycle: contract.review_cycle_count, judge_cli: judge.name, verdict: passed ? "PASS" : "REJECT", skipped, attempts, review: output }));
                 await this.saveContractAtomically(contract);
                 return {
                     content: [

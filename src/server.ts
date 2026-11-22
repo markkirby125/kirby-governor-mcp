@@ -235,6 +235,7 @@ export const ContractRecordSchema = z.object({
         judge_cli: z.string().max(128),
         judge_skipped: z.string().max(1_000).optional(),
         judge_attempts: z.string().max(2_000).optional(),
+        judge_review: z.string().max(4_000).optional(),
         verdict: z.string().max(64)
       })
     )
@@ -249,6 +250,15 @@ export function pushHistory(contract: ContractRecord, entry: ContractRecord["his
   while (contract.history.length > 100) contract.history.shift();
 }
 
+/** The judge's own text for the history. Over the cap, keeps the head (the findings) and the tail (the verdict line). */
+function cappedReview(review: string | undefined, max: number): string | undefined {
+  const text = review?.trim();
+  if (!text) return undefined;
+  if (text.length <= max) return text;
+  const tail = 900;
+  return `${text.slice(0, max - tail - 1)}…${text.slice(-tail)}`;
+}
+
 /** Builds a history entry with the skipped and attempt lists capped to the schema limits, so a saved contract always reloads. */
 export function judgeHistoryEntry(e: {
   cycle: number;
@@ -256,6 +266,7 @@ export function judgeHistoryEntry(e: {
   verdict: string;
   skipped: string[];
   attempts: string[];
+  review?: string;
 }): ContractRecord["history"][number] {
   const joined = (list: string[], max: number) => {
     if (list.length === 0) return undefined;
@@ -274,6 +285,7 @@ export function judgeHistoryEntry(e: {
     judge_cli: e.judge_cli,
     judge_skipped: joined(e.skipped, 1_000),
     judge_attempts: joined(e.attempts, 2_000),
+    judge_review: cappedReview(e.review, 4_000),
     verdict: e.verdict
   };
 }
@@ -1499,7 +1511,7 @@ export class KirbyGovernorServer {
 
           pushHistory(
             contract,
-            judgeHistoryEntry({ cycle: contract.review_cycle_count, judge_cli: judge.name, verdict: passed ? "PASS" : "REJECT", skipped, attempts })
+            judgeHistoryEntry({ cycle: contract.review_cycle_count, judge_cli: judge.name, verdict: passed ? "PASS" : "REJECT", skipped, attempts, review: output })
           );
 
           await this.saveContractAtomically(contract);

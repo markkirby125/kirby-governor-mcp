@@ -1002,6 +1002,23 @@ describe("judge history entries", () => {
     assert.equal(entry.judge_attempts, "zcode-cli timed out (exit 124) | reasonix-cli exited 1 with empty output");
   });
 
+  test("saves the judge's own text and keeps the verdict line when it is long", () => {
+    const review = `BLOCKING ISSUE: first finding\n${"f".repeat(6000)}\nVERDICT: REJECT`;
+    const entry = judgeHistoryEntry({ cycle: 2, judge_cli: "reasonix-cli", verdict: "REJECT", skipped: [], attempts: [], review });
+    assert.ok(entry.judge_review.length <= 4000);
+    assert.ok(entry.judge_review.startsWith("BLOCKING ISSUE: first finding"));
+    assert.ok(entry.judge_review.endsWith("VERDICT: REJECT"), "the verdict line is at the end and must survive");
+    assert.ok(entry.judge_review.includes("…"), "a cut review must carry a truncation marker");
+    assert.doesNotThrow(() => ContractRecordSchema.shape.history.parse([entry]));
+  });
+
+  test("keeps a short review whole and omits the field when there is none", () => {
+    const short = judgeHistoryEntry({ cycle: 1, judge_cli: "x", verdict: "PASS", skipped: [], attempts: [], review: "ok\nVERDICT: PASS" });
+    assert.equal(short.judge_review, "ok\nVERDICT: PASS");
+    const none = judgeHistoryEntry({ cycle: 1, judge_cli: "x", verdict: "PASS", skipped: [], attempts: [] });
+    assert.equal(none.judge_review, undefined);
+  });
+
   test("pushHistory drops the oldest entry past 100", () => {
     const contract = { history: [] };
     for (let i = 0; i < 105; i++) {
