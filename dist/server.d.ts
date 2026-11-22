@@ -70,7 +70,7 @@ export declare const ContractRecordSchema: z.ZodObject<{
     }, z.core.$strip>>;
 }, z.core.$strip>;
 export type ContractRecord = z.infer<typeof ContractRecordSchema>;
-/** Appends a history entry and drops the oldest past the schema's 100-entry cap, so a saved contract always reloads. */
+/** Appends a history entry and drops the oldest past the schema's cap, so a saved contract always reloads. */
 export declare function pushHistory(contract: ContractRecord, entry: ContractRecord["history"][number]): void;
 /** Builds a history entry with the skipped and attempt lists capped to the schema limits, so a saved contract always reloads. */
 export declare function judgeHistoryEntry(e: {

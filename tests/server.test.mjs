@@ -1019,6 +1019,16 @@ describe("judge history entries", () => {
     assert.equal(none.judge_review, undefined);
   });
 
+  test("a very long reason list keeps the newest reasons and drops the oldest", () => {
+    // Four characters each, so none is cut at the 8-character floor; 400 of them still overflow the 2000 cap.
+    const attempts = Array.from({ length: 400 }, (_, i) => `r${i}`.padEnd(4, "_"));
+    const entry = judgeHistoryEntry({ cycle: 1, judge_cli: "none", verdict: "JUDGE_UNAVAILABLE", skipped: [], attempts });
+    assert.ok(entry.judge_attempts.length <= 2000);
+    assert.ok(entry.judge_attempts.endsWith("r399"), "the last reason must survive whole");
+    assert.ok(entry.judge_attempts.startsWith("…"), "dropped reasons are marked");
+    assert.doesNotThrow(() => ContractRecordSchema.shape.history.parse([entry]));
+  });
+
   test("pushHistory drops the oldest entry past 100", () => {
     const contract = { history: [] };
     for (let i = 0; i < 105; i++) {
@@ -1095,6 +1105,82 @@ describe("judge failover through the verify handler", { skip: process.platform =
     assert.equal(entry.verdict, "PASS");
     assert.equal(entry.judge_cli, "codex-cli");
     assert.match(entry.judge_attempts, /reasonix-cli exited 1 with empty output.*no tools allowed/s);
+  });
+});
+
+describe("client timeout while every judge fails", { skip: process.platform === "win32" }, () => {
+  let repo;
+  let stubDir;
+  let client;
+
+  before(async () => {
+    repo = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-gov-timeout-"));
+    stubDir = await fs.mkdtemp(path.join(os.tmpdir(), "kirby-gov-timeout-stubs-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+    await fs.writeFile(path.join(repo, "app.ts"), "export const v = 1;\n", "utf8");
+    execFileSync("git", ["add", "app.ts"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "base"], { cwd: repo });
+    // Each judge fails after 0.5 s, so the whole chain outlasts the 300 ms client timeout below.
+    for (const name of ["reasonix", "codex", "claude"]) {
+      await fs.writeFile(path.join(stubDir, name), `#!/bin/sh\ncat >/dev/null\nsleep 0.5\necho '${name} stub: gave up' >&2\nexit 1\n`, { mode: 0o755 });
+    }
+    const transport = new StdioClientTransport({
+      command: "node",
+      args: [SERVER_DIST],
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env.PATH}`,
+        KIRBY_GOVERNOR_REPO_ROOT: repo,
+        KIRBY_GOVERNOR_ENABLE_ZCODE_JUDGE: "0",
+        KIRBY_GOVERNOR_JUDGE_CMD: ""
+      }
+    });
+    client = new Client({ name: "timeout-test", version: "1.0.0" }, { capabilities: {} });
+    await client.connect(transport);
+  });
+
+  after(async () => {
+    if (client) await client.close();
+    if (repo) await fs.rm(repo, { recursive: true, force: true });
+    if (stubDir) await fs.rm(stubDir, { recursive: true, force: true });
+  });
+
+  test("the server finishes after the client gave up and the contract still holds every reason", async () => {
+    await client.callTool({
+      name: "compile_execution_contract",
+      arguments: {
+        contract_id: "timeout-v1",
+        task_type: "outcome_driven",
+        raw_task: "Client timeout test",
+        altitude: { ultimate_outcome: "A client timeout loses no judge failure reason", decisions_enabled: ["Whether the reasons survive"] },
+        depth: {
+          unasked_expert_actions: ["Time the client out mid-chain", "Read the saved history afterwards"],
+          raw_data_sources: ["app.ts"],
+          expert_methods_and_tools: ["stub judges", "node test runner"],
+          unreasonable_target: "The saved history names every failed judge"
+        },
+        empirical_gate: { proof_command: "node -v" }
+      }
+    });
+    await fs.writeFile(path.join(repo, "app.ts"), "export const v = 2;\n", "utf8");
+
+    await assert.rejects(
+      client.callTool({ name: "verify_adversarial_diff", arguments: { contract_id: "timeout-v1", primary_agent_family: "claude" } }, undefined, { timeout: 300 }),
+      /timed out/i
+    );
+
+    const contractPath = path.join(repo, ".governor", "contracts", "timeout-v1.json");
+    let entry;
+    for (let i = 0; i < 100 && !entry; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const saved = JSON.parse(await fs.readFile(contractPath, "utf8"));
+      entry = saved.history.find((h) => h.verdict === "JUDGE_UNAVAILABLE");
+    }
+    assert.ok(entry, "the server must save the failure after the client has gone");
+    assert.match(entry.judge_attempts, /reasonix-cli.*gave up/s);
+    assert.equal(existsSync(path.join(repo, ".governor", "contracts", "timeout-v1.lock")), false, "the lock is released");
   });
 });
 

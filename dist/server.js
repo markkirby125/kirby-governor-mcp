@@ -45,6 +45,7 @@ const MAX_STORED_CONTRACTS = 50;
 const LOCK_STALE_MS = Number(process.env.KIRBY_GOVERNOR_LOCK_STALE_MS) || 2 * 60 * 1000;
 const LOCK_HEARTBEAT_MS = Number(process.env.KIRBY_GOVERNOR_LOCK_HEARTBEAT_MS) || 20 * 1000;
 const TMP_ORPHAN_MAX_AGE_MS = 60 * 60 * 1000;
+const HISTORY_MAX = 100;
 /** Exit code runCommandSafe reports for a process killed on timeout (same convention as timeout(1)). */
 const TIMEOUT_EXIT_CODE = 124;
 const AGENT_FAMILIES = ["claude", "codex", "gemini", "zcode", "grok", "other"];
@@ -230,12 +231,12 @@ export const ContractRecordSchema = z.object({
         judge_review: z.string().max(4_000).optional(),
         verdict: z.string().max(64)
     }))
-        .max(100)
+        .max(HISTORY_MAX)
 });
-/** Appends a history entry and drops the oldest past the schema's 100-entry cap, so a saved contract always reloads. */
+/** Appends a history entry and drops the oldest past the schema's cap, so a saved contract always reloads. */
 export function pushHistory(contract, entry) {
     contract.history.push(entry);
-    while (contract.history.length > 100)
+    while (contract.history.length > HISTORY_MAX)
         contract.history.shift();
 }
 /** The judge's own text for the history. Over the cap, keeps the head (the findings) and the tail (the verdict line). */
@@ -258,10 +259,14 @@ export function judgeHistoryEntry(e) {
             return text;
         // Over the cap: each reason gets an equal share, marked with an ellipsis, so the last judges' reasons survive too.
         const share = Math.max(8, Math.floor((max - 3 * (list.length - 1)) / list.length));
-        return list
-            .map((s) => (s.length > share ? `${s.slice(0, share - 1)}…` : s))
-            .join(" | ")
-            .slice(0, max);
+        let kept = list.map((s) => (s.length > share ? `${s.slice(0, share - 1)}…` : s));
+        let out = kept.join(" | ");
+        // A very long list still overflows at the minimum share: drop the oldest reasons, never the newest.
+        while (out.length > max && kept.length > 1) {
+            kept = kept.slice(1);
+            out = `… | ${kept.join(" | ")}`;
+        }
+        return out.slice(0, max);
     };
     return {
         cycle: e.cycle,
@@ -1356,7 +1361,7 @@ export class KirbyGovernorServer {
                         content: [
                             {
                                 type: "text",
-                                text: `JUDGE_UNAVAILABLE (all judges in chain failed): ${[...skipped, ...attempts].join(" | ")}${saveNote}`
+                                text: `JUDGE_UNAVAILABLE (all judges in chain failed): ${cappedReview([...skipped, ...attempts].join(" | "), 4_000) ?? ""}${saveNote}`
                             }
                         ]
                     };
