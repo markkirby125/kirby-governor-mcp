@@ -31,7 +31,7 @@ Copy and paste this into any AI coding app (Cursor, Windsurf, Claude Code, Grok,
 
 Unless `KIRBY_GOVERNOR_JUDGE_CMD` is set, only CLIs found on `PATH` are used. A candidate from the same model family as the primary agent is tried last.
 
-The chain moves on to the next judge when a judge produces empty stdout. That covers a non-zero exit with no output, a spawn error, and a failure to write the zcode payload file. It also covers a 120-second timeout: a judge killed for timing out is skipped even if it printed partial output. The first judge that finishes in time and writes stdout is used. If every judge fails, the tool returns `JUDGE_UNAVAILABLE` with each attempt's reason.
+The chain moves on to the next judge when a judge produces empty stdout. That covers a non-zero exit with no output, a spawn error, and a failure to write the zcode payload file. It also covers a timeout (120 seconds, or 300 seconds for zcode and reasonix): a judge killed for timing out is skipped even if it printed partial output. The first judge that finishes in time and writes stdout is used. If every judge fails, the tool returns `JUDGE_UNAVAILABLE` with each attempt's reason, and saves the same reasons in the contract history (`judge_attempts`) so they survive a client timeout. The review prompt tells judges to use no tools and judge from the diff alone.
 
 Setting `KIRBY_GOVERNOR_JUDGE_CMD` replaces the whole chain with the single command you give (a JSON array or a shell-style string).
 

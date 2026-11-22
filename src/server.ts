@@ -42,7 +42,9 @@ const MAX_ACCUMULATED_CONTEXT_CHARS = 60_000;
 const MAX_REVIEW_CYCLES = 3;
 const MAX_PREGATE_FAILURES = 6;
 const MAX_STORED_CONTRACTS = 50;
-const LOCK_STALE_MS = 10 * 60 * 1000; // 10 minutes (exceeds 4 x 90s Range Crew max duration)
+// 20 minutes: longer than the slowest judge chain (proof ~60 s + zcode 305 s + reasonix 305 s + codex 125 s + claude 125 s),
+// so a lock cannot go stale while the call that holds it is still running.
+const LOCK_STALE_MS = 20 * 60 * 1000;
 const TMP_ORPHAN_MAX_AGE_MS = 60 * 60 * 1000;
 /** Exit code runCommandSafe reports for a process killed on timeout (same convention as timeout(1)). */
 const TIMEOUT_EXIT_CODE = 124;
@@ -845,7 +847,9 @@ export class KirbyGovernorServer {
         name: "reasonix-cli",
         cmd: "reasonix",
         args: ["-p", "--model", "deepseek-flash", "--output-format", "text"],
-        deliver: "stdin"
+        deliver: "stdin",
+        // Measured 2026-11-22: 167 s on a 22 KB diff, so the 120 s chain default timed out on real payloads.
+        timeoutMs: 300_000
       },
       { family: "codex", name: "codex-cli", cmd: "codex", args: ["exec", "-"], deliver: "stdin" },
       { family: "claude", name: "claude-cli", cmd: "claude", args: ["-p", "-"], deliver: "stdin" }
@@ -1454,11 +1458,10 @@ export class KirbyGovernorServer {
               skipped,
               attempts
             });
-            // Reload before saving: after a long chain another call may have changed the contract (lock evicted as stale).
-            const fresh = await this.loadContract(contract_id).catch(() => contract);
-            pushHistory(fresh, unavailable);
+            // The contract lock outlasts the longest chain (LOCK_STALE_MS), so this in-memory copy cannot be stale.
+            pushHistory(contract, unavailable);
             let saveNote = "";
-            await this.saveContractAtomically(fresh).catch((err: unknown) => {
+            await this.saveContractAtomically(contract).catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
               console.error(`[kirby-governor] Could not save JUDGE_UNAVAILABLE history: ${msg}`);
               saveNote = ` | NOT SAVED to the contract: ${msg}`;
