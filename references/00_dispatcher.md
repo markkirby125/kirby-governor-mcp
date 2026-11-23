@@ -59,7 +59,7 @@ Implements Felix Rieseberg's **Range** workflow:
 
 ### Build & Test
 ```bash
-cd /home/paulk/Desktop/SKILLS/kirby-skills/kirby-governor-mcp
+cd /home/paulk/AI_projects/skills/kirby-skills/kirby-governor-mcp
 npm install
 npm test
 ```
@@ -70,7 +70,7 @@ npm test
   "mcpServers": {
     "kirby-governor-mcp": {
       "command": "node",
-      "args": ["/home/paulk/Desktop/SKILLS/kirby-skills/kirby-governor-mcp/dist/server.js"],
+      "args": ["/home/paulk/AI_projects/skills/kirby-skills/kirby-governor-mcp/dist/server.js"],
       "env": {
         "KIRBY_GOVERNOR_REDACT_SECRETS": "1",
         "KIRBY_GOVERNOR_CACHE_VERIFIED_DIFF": "1",
